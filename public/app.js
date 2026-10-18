@@ -937,7 +937,7 @@ function hostKey(e) {
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
-  if (el.tagName === 'BUTTON') el.blur();
+  if (el.tagName === 'BUTTON') { el.blur(); if (el.closest('summary')) e.preventDefault(); }
   act(el.dataset.act, el.dataset);
 });
 function act(a, d = {}) {
@@ -1059,12 +1059,14 @@ document.addEventListener('input', e => {
   if (ds.pbadge) { const p = player(ds.id); if (el.checked) p.badges[ds.pbadge] = true; else delete p.badges[ds.pbadge]; save(); renderPlayers(); return; }
   if (ds.bet && F) { setBet(player(ds.bet), el.value, false); updateFinalDyn(); pushState(); return; }
   if (el.id === 'auc-bid' && Q && Q.auc) { Q.auc.bid = Number(el.value) || 0; pushState(); return; }
+  if (el.id === 'reg-q') { filterReg(el.value); return; }
   if (el.id === 'bank-q') { const v = el.value.trim().toLowerCase(); $$('.bank-t').forEach(t => { const hit = !v || t.dataset.search.includes(v); t.hidden = !hit; if (v && hit) t.open = true; }); return; }
   if (ds.path !== undefined && S.screen === 'editor') edInput(el);
 });
 document.addEventListener('change', e => {
   const el = e.target, ds = el.dataset;
   if (ds.set === 'accent' || ds.set === 'hostRemote') { render(); return; }
+  if (el.id === 'reg-import' && el.files && el.files[0]) { regImport(el.files[0]); return; }
   if (S.screen !== 'editor') return;
   if (ds.media && el.files && el.files[0]) loadMediaFile(ds.media, el.files[0]);
   else if (ds.mediaurl !== undefined && el.value.trim()) { setPath(S.pack, ds.mediaurl, { kind: kindByName(el.value), src: el.value.trim(), name: el.value.trim() }); savePack(); renderEditor(); }
@@ -1119,13 +1121,176 @@ function importPack(file) {
   };
   r.readAsText(file);
 }
-function exportPack() {
-  const blob = new Blob([JSON.stringify(S.pack)], { type: 'application/json' });
+function download(text, name) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = (S.pack.name || 'pack').replace(/[\\/:*?"<>|]+/g, '_') + '.svoyak.json';
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = name.replace(/[\\/:*?"<>|]+/g, '_');
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function exportPack() { download(JSON.stringify(S.pack), (S.pack.name || 'pack') + '.svoyak.json'); }
+function toast(msg) {
+  let t = $('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.append(t); }
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2800);
+}
+
+/* =================== реестр тем и вопросов =================== */
+// Общий для всех устройств: хранится на сервере сайта (а без сервера — в этом браузере).
+const REG = { data: null, storage: '', persistent: false, tab: 'themes', loading: null };
+const cleanQ = (q, i) => { const c = clone(q); c.value = 0; c.modifier = ''; if (i != null) c.diff = i + 1; delete c.id; delete c.saved; delete c.theme; return c; };
+const cleanTheme = t => ({ name: t.name.trim(), desc: t.desc || '', questions: t.questions.map((q, i) => cleanQ(q, i)) });
+const seedThemes = () => (window.QUESTION_BANK || []).map(([name, desc, qs, kind]) => ({ name, desc: desc || '', questions: qs.map(([text, answer], i) => ({ type: kind === 'closest' ? 'closest' : 'normal', text, answer, media: null, answerMedia: null, modifier: '', value: 0, diff: i + 1 })) }));
+function regApplyLocal(reg, b) {   // то же, что regApply на сервере — для игры без сервера
+  const now = Date.now(), same = (a, c) => String(a || '').trim().toLowerCase() === String(c || '').trim().toLowerCase();
+  switch (b.op) {
+    case 'seed': if (!reg.seeded) { b.themes.forEach(t => reg.themes.push(Object.assign({}, t, { id: uid(), saved: now }))); reg.seeded = true; } return 'ok';
+    case 'addTheme': {
+      const i = reg.themes.findIndex(x => same(x.name, b.theme.name));
+      if (i >= 0 && !b.replace) return 'exists';
+      const item = Object.assign({}, b.theme, { id: i >= 0 ? reg.themes[i].id : uid(), saved: now });
+      if (i >= 0) reg.themes[i] = item; else reg.themes.unshift(item);
+      return i >= 0 ? 'replaced' : 'ok';
+    }
+    case 'addQuestion':
+      if (reg.questions.some(x => same(x.text, b.question.text) && same(x.answer, b.question.answer))) return 'exists';
+      reg.questions.unshift(Object.assign({}, b.question, { id: uid(), theme: b.theme || '', saved: now })); return 'ok';
+    case 'delTheme': reg.themes = reg.themes.filter(t => t.id !== b.id); return 'ok';
+    case 'delQuestion': reg.questions = reg.questions.filter(q => q.id !== b.id); return 'ok';
+    case 'import':
+      (b.themes || []).forEach(t => { if (!reg.themes.some(x => same(x.name, t.name))) reg.themes.push(Object.assign({}, t, { id: uid(), saved: now })); });
+      (b.questions || []).forEach(q => { if (!reg.questions.some(x => same(x.text, q.text) && same(x.answer, q.answer))) reg.questions.push(Object.assign({}, q, { id: uid(), saved: now })); });
+      return 'ok';
+  }
+  throw new Error('Неизвестная операция');
+}
+function regSet(j) { REG.data = { themes: j.themes || [], questions: j.questions || [], seeded: !!j.seeded }; REG.storage = j.storage; REG.persistent = !!j.persistent; }
+async function regLocal() { REG.data = (await DB.get('registry')) || { themes: [], questions: [], seeded: false }; REG.storage = 'browser'; REG.persistent = true; }
+async function regLoad() {
+  if (NET.online) { try { regSet(await (await fetch('/api/registry')).json()); } catch { await regLocal(); } }
+  else await regLocal();
+  if (!REG.data.seeded) await regOp({ op: 'seed', themes: seedThemes() });
+}
+const regReady = () => (REG.data ? Promise.resolve() : (REG.loading = REG.loading || regLoad().catch(e => { REG.loading = null; throw e; })));
+async function regOp(body) {
+  if (REG.storage !== 'browser') {
+    const r = await fetch('/api/registry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({ error: 'Сервер не ответил' }));
+    if (!r.ok) throw new Error(j.error || 'Ошибка реестра');
+    regSet(j); return j.result;
+  }
+  const res = regApplyLocal(REG.data, body);
+  await DB.set('registry', REG.data);
+  return res;
+}
+function regStatusText() {
+  if (REG.storage === 'github') return '☁ Общий реестр сайта — сохраняется навсегда (GitHub)';
+  if (REG.storage === 'browser') return '💻 Реестр хранится только в этом браузере';
+  return /^(localhost|127\.0\.0\.1)$/.test(location.hostname) || /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname)
+    ? '💾 Реестр хранится на этом компьютере (data/registry.json)'
+    : '⚠ Временный реестр: сотрётся при перезапуске сервера. Добавь GITHUB_TOKEN в настройках Render — и он будет сохраняться навсегда';
+}
+function filterReg(v) {
+  v = v.trim().toLowerCase();
+  $$('.reg-list [data-search]').forEach(el => { const hit = !v || el.dataset.search.includes(v); el.hidden = !hit; if (v && hit && el.tagName === 'DETAILS') el.open = true; });
+}
+async function regModal() {
+  if (!REG.data) {
+    modal('<h3>🗂 Реестр</h3><p class="hint">Загружаю…</p>', 'wide');
+    try { await regReady(); } catch (e) { return modal(`<h3>🗂 Реестр</h3><p class="hint">Не удалось загрузить реестр: ${esc(e.message)}</p>`); }
+  }
+  const keep = { scroll: $('.reg-list') ? $('.reg-list').scrollTop : 0, q: $('#reg-q') ? $('#reg-q').value : '', open: $$('.reg-t[open]').map(x => x.dataset.id) };
+  const R = REG.data, inRound = E.tab[0] === 'r', sel = inRound && E.sel ? E.sel : null;
+  const qRow = (q, qi, attrs) => `<div class="bank-q"><span class="diff">${'●'.repeat(Math.min(5, q.diff || qi + 1))}</span><div class="grow"><div>${q.type === 'closest' ? '🎯 ' : ''}${esc(q.text)}${q.media && q.media.src ? ' 🖼' : ''}</div><div class="muted">${esc(q.answer)}</div></div>${sel ? `<button class="btn sm outline" data-act="ed-regswap" ${attrs}>⇄ В клетку</button>` : ''}`;
+  const themesHTML = R.themes.map(t => `<details class="bank-t reg-t" data-id="${t.id}" ${keep.open.includes(t.id) ? 'open' : ''} data-search="${esc((t.name + ' ' + (t.desc || '') + ' ' + t.questions.map(q => q.text + ' ' + q.answer).join(' ')).toLowerCase())}">
+      <summary><span class="grow"><b>${esc(t.name)}</b> <span class="muted">${t.questions.length} · ${esc(t.desc || '')}</span></span>${inRound ? `<button class="btn sm outline" data-act="ed-regins" data-id="${t.id}">+ В раунд</button>` : ''}<button class="icon" data-act="ed-regdelt" data-id="${t.id}" title="Удалить из реестра">🗑</button></summary>
+      ${t.questions.map((q, qi) => qRow(q, qi, `data-id="${t.id}" data-q="${qi}"`) + '</div>').join('')}</details>`).join('')
+    || '<p class="hint">Тем пока нет. Сохраняй их кнопкой 💾 рядом с названием темы в раунде.</p>';
+  const qsHTML = R.questions.map(q => `<div class="reg-q" data-search="${esc((q.theme + ' ' + q.text + ' ' + q.answer).toLowerCase())}">${q.theme ? `<div class="reg-tag">${esc(q.theme)}</div>` : ''}${qRow(q, 0, `data-qid="${q.id}"`)}<button class="icon" data-act="ed-regdelq" data-id="${q.id}" title="Удалить из реестра">🗑</button></div></div>`).join('')
+    || '<p class="hint">Отдельных вопросов пока нет. Открой клетку в раунде и нажми «💾 В реестр».</p>';
+  modal(`<div class="bank-head"><h3>🗂 Реестр тем и вопросов</h3><button class="icon" data-act="modal-close">✕</button></div>
+    <div class="reg-status ${REG.persistent ? '' : 'warn'}">${esc(regStatusText())}</div>
+    <div class="row wrap gap" style="margin:10px 0">
+      <button class="seg-b ${REG.tab === 'themes' ? 'on' : ''}" data-act="ed-regtab" data-v="themes">Темы · ${R.themes.length}</button>
+      <button class="seg-b ${REG.tab === 'questions' ? 'on' : ''}" data-act="ed-regtab" data-v="questions">Вопросы · ${R.questions.length}</button>
+      <input class="inp" id="reg-q" placeholder="Поиск по темам, вопросам и ответам…" value="${esc(keep.q)}" style="flex:1;min-width:180px">
+      <button class="btn sm ghost" data-act="ed-regexport" title="Скачать реестр файлом">⬇ Файл</button>
+      <label class="btn sm ghost file" title="Добавить темы и вопросы из файла">⬆ Файл<input type="file" accept=".json,application/json" id="reg-import" hidden></label>
+    </div>
+    ${sel ? '<p class="hint" style="margin:0 0 8px">Выбрана клетка — «⇄ В клетку» поставит в неё вопрос из реестра (текущий вопрос клетки заменится).</p>' : inRound ? '' : '<p class="hint" style="margin:0 0 8px">Открой раунд, чтобы добавлять темы в игру.</p>'}
+    <div class="bank-list reg-list">${REG.tab === 'themes' ? themesHTML : qsHTML}</div>`, 'wide');
+  const l = $('.reg-list'); if (l) l.scrollTop = keep.scroll;
+  if (keep.q) filterReg(keep.q);
+}
+async function regAct(a, d) {
+  const pk = S.pack;
+  try {
+    if (a !== 'ed-reg') await regReady();
+    switch (a) {
+      case 'ed-reg': return regModal();
+      case 'ed-regtab': REG.tab = d.v; return regModal();
+      case 'ed-regtheme': {
+        const t = pk.rounds[+d.r].themes[+d.t];
+        if (!t.name.trim()) return toast('Сначала дай теме название');
+        let res = await regOp({ op: 'addTheme', theme: cleanTheme(t) });
+        if (res === 'exists') {
+          if (!confirm(`Тема «${t.name}» уже есть в реестре. Заменить её этой версией?`)) return;
+          res = await regOp({ op: 'addTheme', theme: cleanTheme(t), replace: true });
+        }
+        return toast(res === 'replaced' ? `«${t.name}» обновлена в реестре` : `«${t.name}» сохранена в реестр`);
+      }
+      case 'ed-reground': {
+        const r = pk.rounds[+d.r], names = new Set(REG.data.themes.map(t => t.name.trim().toLowerCase()));
+        const list = r.themes.filter(t => t.name.trim()), dup = list.filter(t => names.has(t.name.trim().toLowerCase()));
+        const replace = dup.length ? confirm(`Тем с такими же названиями в реестре: ${dup.length}. Заменить их версиями из раунда?\n(«Отмена» — сохранить только новые)`) : false;
+        let n = 0;
+        for (const t of list) { if (await regOp({ op: 'addTheme', theme: cleanTheme(t), replace }) !== 'exists') n++; }
+        return toast(`Сохранено в реестр тем: ${n}`);
+      }
+      case 'ed-regq': {
+        if (!E.sel) return;
+        const th = pk.rounds[E.sel.r].themes[E.sel.t], q = th.questions[E.sel.q];
+        if (!String(q.text || '').trim() && !(q.media && q.media.src)) return toast('Вопрос пустой');
+        const res = await regOp({ op: 'addQuestion', question: cleanQ(q, E.sel.q), theme: th.name });
+        return toast(res === 'exists' ? 'Такой вопрос уже есть в реестре' : 'Вопрос сохранён в реестр');
+      }
+      case 'ed-regins': {
+        const t = REG.data.themes.find(x => x.id === d.id), r = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null;
+        if (!t || !r) return;
+        r.themes.push(cleanTheme(t)); E.sel = null; savePack(); renderEditor();
+        toast(`«${t.name}» добавлена в раунд`);
+        return regModal();
+      }
+      case 'ed-regswap': {
+        if (!E.sel) return;
+        const src = d.qid ? REG.data.questions.find(x => x.id === d.qid) : (REG.data.themes.find(x => x.id === d.id) || { questions: [] }).questions[+d.q];
+        if (!src) return;
+        const arr = pk.rounds[E.sel.r].themes[E.sel.t].questions, nq = cleanQ(src, E.sel.q);
+        nq.value = arr[E.sel.q] ? arr[E.sel.q].value : 0;
+        arr[E.sel.q] = nq; savePack(); closeModal(); renderEditor();
+        return toast('Вопрос поставлен в клетку');
+      }
+      case 'ed-regdelt': {
+        const t = REG.data.themes.find(x => x.id === d.id);
+        if (!t || !confirm(`Удалить тему «${t.name}» из реестра? Она пропадёт для всех.`)) return;
+        await regOp({ op: 'delTheme', id: d.id }); return regModal();
+      }
+      case 'ed-regdelq':
+        if (!confirm('Удалить вопрос из реестра? Он пропадёт для всех.')) return;
+        await regOp({ op: 'delQuestion', id: d.id }); return regModal();
+      case 'ed-regexport': return download(JSON.stringify({ themes: REG.data.themes, questions: REG.data.questions }), 'Реестр — Своя игра.json');
+    }
+  } catch (e) { toast('⚠ ' + (e.message || e)); }
+}
+async function regImport(file) {
+  try {
+    const j = JSON.parse(await file.text());
+    if (!Array.isArray(j.themes) && !Array.isArray(j.questions)) throw new Error('в файле нет тем и вопросов');
+    await regReady();
+    await regOp({ op: 'import', themes: j.themes || [], questions: j.questions || [] });
+    toast('Реестр пополнен из файла'); regModal();
+  } catch (e) { toast('⚠ Не получилось: ' + e.message); }
 }
 function edInput(el) {
   const v = el.type === 'checkbox' ? el.checked : el.dataset.type === 'num' ? (el.value === '' ? 0 : Number(el.value)) : el.value;
@@ -1149,7 +1314,8 @@ function renderEditor() {
       <button class="nav-b add" data-act="ed-addround">+ Раунд</button>
       <button class="nav-b ${E.tab === 'final' ? 'on' : ''}" data-act="ed-tab" data-v="final">🏁 Финал</button>
       <button class="nav-b ${E.tab === 'mods' ? 'on' : ''}" data-act="ed-tab" data-v="mods">✨ Модификаторы</button>
-      <button class="nav-b small" data-act="ed-bank">📚 Запас <span class="muted">${bankCount()}</span></button>
+      <button class="nav-b small" data-act="ed-reg">🗂 Реестр тем и вопросов</button>
+      <button class="nav-b small" data-act="ed-bank">📚 Запас пакета <span class="muted">${bankCount()}</span></button>
       <div class="grow"></div>
       <div class="ed-save" id="ed-save">✓ Сохранено</div>
       <button class="btn" data-act="ed-close">← ${E.back === 'game' ? 'В игру' : 'Назад'}</button>
@@ -1208,7 +1374,9 @@ function edMain() {
   return `<div class="ed-head">
       <input class="inp title" data-path="rounds.${ri}.name" value="${esc(r.name)}" placeholder="Название раунда">
       <label>Случайных модификаторов <input class="inp sm" type="number" min="0" max="40" data-path="rounds.${ri}.randomMods" data-type="num" value="${Number(r.randomMods) || 0}"></label>
-      <button class="btn outline sm" data-act="ed-bank" title="Запас вопросов">📚 Запас · ${bankCount()}</button>
+      <button class="btn outline sm" data-act="ed-reg" title="Общий реестр тем и вопросов">🗂 Реестр</button>
+      <button class="btn outline sm" data-act="ed-reground" data-r="${ri}" title="Сохранить все темы этого раунда в реестр">💾 Раунд в реестр</button>
+      <button class="btn outline sm" data-act="ed-bank" title="Запас вопросов этого пакета">📚 Запас · ${bankCount()}</button>
       <button class="btn outline sm" data-act="ed-randtheme" title="Собрать тему из 5 случайных вопросов запаса по возрастанию сложности">🎲 Случайная тема</button>
       <button class="btn ghost sm" data-act="ed-autoval" data-r="${ri}" title="Сбросить стоимости на стандартные">Стоимости ${(ri + 1) * 100}…</button>
       <button class="btn ghost sm danger" data-act="ed-delround" data-r="${ri}">Удалить раунд</button>
@@ -1216,7 +1384,7 @@ function edMain() {
     <div class="ed-board">${r.themes.map((t, ti) => `<div class="ed-theme" style="--n:${t.questions.length}">
       <div class="ed-tcol"><input class="inp" data-path="rounds.${ri}.themes.${ti}.name" value="${esc(t.name)}" placeholder="Тема" style="font-weight:800">
         <input class="inp desc" data-path="rounds.${ri}.themes.${ti}.desc" value="${esc(t.desc)}" placeholder="Подсказка к теме">
-        <div class="row"><button class="icon" data-act="ed-tup" data-r="${ri}" data-t="${ti}" title="Выше" ${ti ? '' : 'disabled'}>↑</button><button class="icon" data-act="ed-tdown" data-r="${ri}" data-t="${ti}" title="Ниже" ${ti < r.themes.length - 1 ? '' : 'disabled'}>↓</button><div class="grow"></div><button class="icon" data-act="ed-tobank" data-r="${ri}" data-t="${ti}" title="Убрать тему в запас">📚</button><button class="icon" data-act="ed-tdel" data-r="${ri}" data-t="${ti}" title="Удалить тему">🗑</button></div></div>
+        <div class="row"><button class="icon" data-act="ed-tup" data-r="${ri}" data-t="${ti}" title="Выше" ${ti ? '' : 'disabled'}>↑</button><button class="icon" data-act="ed-tdown" data-r="${ri}" data-t="${ti}" title="Ниже" ${ti < r.themes.length - 1 ? '' : 'disabled'}>↓</button><div class="grow"></div><button class="icon" data-act="ed-regtheme" data-r="${ri}" data-t="${ti}" title="Сохранить тему в реестр">💾</button><button class="icon" data-act="ed-tobank" data-r="${ri}" data-t="${ti}" title="Убрать тему в запас">📚</button><button class="icon" data-act="ed-tdel" data-r="${ri}" data-t="${ti}" title="Удалить тему">🗑</button></div></div>
       ${t.questions.map((q, qi) => `<button class="ed-cell ${E.sel && E.sel.r === ri && E.sel.t === ti && E.sel.q === qi ? 'on' : ''}" draggable="true" data-act="ed-sel" data-r="${ri}" data-t="${ti}" data-q="${qi}">${cellInner(ri, ti, qi)}</button>`).join('')}
       <button class="ed-cell add" data-act="ed-addq" data-r="${ri}" data-t="${ti}" title="Добавить вопрос">+</button></div>`).join('')}</div>
     <button class="btn outline" data-act="ed-addtheme" data-r="${ri}">+ Тема</button>`;
@@ -1242,7 +1410,7 @@ function edCell() {
   if (q.type === 'cat' && !q.cat) q.cat = { theme: '', value: 0 };
   const b = `rounds.${r}.themes.${t}.questions.${qi}`;
   return `<div class="ed-side-head"><b>${esc(th.name || 'Тема')} · ${fmt(qValue(q, qi, r))}</b><button class="icon" data-act="ed-unsel">✕</button></div>
-    <button class="btn outline sm" data-act="ed-bank" style="margin-top:10px">📚 Заменить из запаса</button>
+    <div class="row wrap" style="margin-top:10px"><button class="btn sm" data-act="ed-regq">💾 В реестр</button><button class="btn outline sm" data-act="ed-reg">🗂 Из реестра</button><button class="btn outline sm" data-act="ed-bank">📚 Из запаса</button></div>
     <label class="lbl">Стоимость <span class="muted">(0 = стандартная ${fmt((qi + 1) * (r + 1) * 100)})</span></label>
     <input class="inp" type="number" step="100" data-path="${b}.value" data-type="num" value="${Number(q.value) || ''}" placeholder="${(qi + 1) * (r + 1) * 100}">
     <label class="lbl">Тип клетки</label>
@@ -1312,6 +1480,7 @@ document.addEventListener('drop', e => {
 document.addEventListener('dragend', () => { E.drag = null; $$('.ed-cell.over,.ed-cell.dragging').forEach(x => x.classList.remove('over', 'dragging')); });
 
 function edAct(a, d) {
+  if (a.startsWith('ed-reg')) { regAct(a, d); return; }
   const pk = S.pack, r = d.r != null ? pk.rounds[+d.r] : null, curRound = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null;
   let reopenBank = false;
   switch (a) {

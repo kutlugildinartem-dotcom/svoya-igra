@@ -27,6 +27,96 @@ setInterval(() => {   // пустые комнаты живут час
   for (const [code, r] of rooms) if (!conns(r) && Date.now() - r.touched > 3600e3) rooms.delete(code);
 }, 600e3);
 
+/* ---------- реестр тем и вопросов: общий для всех устройств ----------
+   Хранится в data/registry.json, а если заданы GITHUB_TOKEN и GITHUB_REPO — ещё и в ветке GitHub
+   (бесплатный Render стирает файлы при перезапуске, GitHub — нет). */
+const REG_FILE = path.join(__dirname, 'data', 'registry.json');
+const GH = { token: process.env.GITHUB_TOKEN || '', repo: process.env.GITHUB_REPO || '', branch: process.env.GITHUB_BRANCH || 'registry', file: 'registry.json', sha: null, ok: false };
+let registry = { themes: [], questions: [], seeded: false };
+const regStorage = () => (GH.ok ? 'github' : 'file');
+
+async function gh(method, url, body, raw) {
+  return fetch('https://api.github.com' + url, {
+    method,
+    headers: { Authorization: 'Bearer ' + GH.token, 'User-Agent': 'svoya-igra', Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+async function ghEnsureBranch() {
+  if ((await gh('GET', `/repos/${GH.repo}/branches/${GH.branch}`)).ok) return;
+  const main = await (await gh('GET', `/repos/${GH.repo}/git/ref/heads/main`)).json();
+  const r = await gh('POST', `/repos/${GH.repo}/git/refs`, { ref: 'refs/heads/' + GH.branch, sha: main.object.sha });
+  if (!r.ok) throw new Error('не удалось создать ветку ' + GH.branch + ': ' + r.status);
+}
+async function loadRegistry() {
+  let loaded = null;
+  if (GH.token && GH.repo) {
+    try {
+      await ghEnsureBranch();
+      const url = `/repos/${GH.repo}/contents/${GH.file}?ref=${GH.branch}`;
+      const meta = await gh('GET', url);
+      if (meta.ok) { GH.sha = (await meta.json()).sha; loaded = JSON.parse(await (await gh('GET', url, null, true)).text()); }
+      else if (meta.status !== 404) throw new Error('GitHub ответил ' + meta.status);
+      GH.ok = true;
+      console.log('  Реестр: GitHub ' + GH.repo + ' (ветка ' + GH.branch + ')');
+    } catch (e) { console.warn('  Реестр: GitHub недоступен —', e.message); }
+  }
+  if (!loaded) { try { loaded = JSON.parse(fs.readFileSync(REG_FILE, 'utf8')); } catch { } }
+  if (loaded && Array.isArray(loaded.themes)) registry = Object.assign({ themes: [], questions: [], seeded: false }, loaded);
+}
+let regTimer = null, regChain = Promise.resolve();
+function saveRegistry() {
+  clearTimeout(regTimer);
+  regTimer = setTimeout(() => { regChain = regChain.then(persistRegistry).catch(e => console.warn('Реестр не сохранён:', e.message)); }, 2500);
+}
+async function persistRegistry() {
+  const txt = JSON.stringify(registry);
+  try { fs.mkdirSync(path.dirname(REG_FILE), { recursive: true }); fs.writeFileSync(REG_FILE, txt); } catch { }
+  if (!GH.ok) return;
+  const put = () => gh('PUT', `/repos/${GH.repo}/contents/${GH.file}`, { message: 'Реестр: ' + registry.themes.length + ' тем, ' + registry.questions.length + ' вопросов', content: Buffer.from(txt).toString('base64'), branch: GH.branch, sha: GH.sha || undefined });
+  let r = await put();
+  if (r.status === 409 || r.status === 422) {   // файл поменялся — берём свежий sha и повторяем
+    const m = await gh('GET', `/repos/${GH.repo}/contents/${GH.file}?ref=${GH.branch}`);
+    GH.sha = m.ok ? (await m.json()).sha : null;
+    r = await put();
+  }
+  if (!r.ok) throw new Error('GitHub ответил ' + r.status);
+  GH.sha = (await r.json()).content.sha;
+}
+function regApply(reg, b) {
+  const now = Date.now(), nid = () => Math.random().toString(36).slice(2, 10);
+  const same = (a, c) => String(a || '').trim().toLowerCase() === String(c || '').trim().toLowerCase();
+  switch (b.op) {
+    case 'seed':
+      if (!reg.seeded) { (b.themes || []).forEach(t => reg.themes.push(Object.assign({}, t, { id: nid(), saved: now }))); reg.seeded = true; }
+      return 'ok';
+    case 'addTheme': {
+      const t = b.theme;
+      if (!t || !String(t.name || '').trim()) throw new Error('У темы нет названия');
+      const i = reg.themes.findIndex(x => same(x.name, t.name));
+      if (i >= 0 && !b.replace) return 'exists';
+      const item = Object.assign({}, t, { id: i >= 0 ? reg.themes[i].id : nid(), saved: now });
+      if (i >= 0) reg.themes[i] = item; else reg.themes.unshift(item);
+      return i >= 0 ? 'replaced' : 'ok';
+    }
+    case 'addQuestion': {
+      const q = b.question;
+      if (!q || !(String(q.text || '').trim() || (q.media && q.media.src))) throw new Error('Пустой вопрос');
+      if (reg.questions.some(x => same(x.text, q.text) && same(x.answer, q.answer))) return 'exists';
+      reg.questions.unshift(Object.assign({}, q, { id: nid(), theme: b.theme || '', saved: now }));
+      return 'ok';
+    }
+    case 'delTheme': reg.themes = reg.themes.filter(t => t.id !== b.id); return 'ok';
+    case 'delQuestion': reg.questions = reg.questions.filter(q => q.id !== b.id); return 'ok';
+    case 'import':
+      (b.themes || []).forEach(t => { if (!reg.themes.some(x => same(x.name, t.name))) reg.themes.push(Object.assign({}, t, { id: nid(), saved: now })); });
+      (b.questions || []).forEach(q => { if (!reg.questions.some(x => same(x.text, q.text) && same(x.answer, q.answer))) reg.questions.push(Object.assign({}, q, { id: nid(), saved: now })); });
+      return 'ok';
+  }
+  throw new Error('Неизвестная операция');
+}
+const regReply = (res, code, result) => json(res, code, { result, themes: registry.themes, questions: registry.questions, seeded: registry.seeded, storage: regStorage(), persistent: GH.ok });
+
 function lanUrls() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
@@ -99,6 +189,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (p === '/api/registry') {
+    if (req.method !== 'POST') return regReply(res, 200, null);
+    return readBody(req, 40e6, b => {
+      if (!b) return json(res, 400, { error: 'Слишком большой или битый запрос' });
+      try { const result = regApply(registry, b); if (result !== 'exists') saveRegistry(); regReply(res, 200, result); }
+      catch (e) { json(res, 400, { error: e.message }); }
+    });
+  }
+
   if (req.method === 'POST' && p.startsWith('/api/')) {
     const limit = p === '/api/media' ? 60e6 : 1e6;
     return readBody(req, limit, obj => {
@@ -154,10 +253,11 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+loadRegistry().finally(() => server.listen(PORT, '0.0.0.0', () => {
   console.log('\n  СВОЯ ИГРА запущена!\n');
   console.log(`  На этом компьютере:  http://localhost:${PORT}`);
   const urls = lanUrls();
   if (urls.length) { console.log('  В той же Wi-Fi сети:'); for (const u of urls) console.log(`     ${u}`); }
+  console.log('  Реестр: ' + registry.themes.length + ' тем, ' + registry.questions.length + ' вопросов, хранилище — ' + (GH.ok ? 'GitHub' : 'файл data/registry.json'));
   console.log('\n  Не закрывай это окно, пока идёт игра.\n');
-});
+}));
