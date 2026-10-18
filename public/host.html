@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0f1015">
+<title>Пульт ведущего · Своя игра</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Unbounded:wght@700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1015;--surface:#181a22;--surface2:#21242f;--line:#2c303d;--text:#f2f3f7;--muted:#8b90a0;--accent:#7c6cff;--good:#2ad1a3;--bad:#ff5e6c;--gold:#f5c542}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Manrope',system-ui,sans-serif}
+body{padding:14px 14px 40px;max-width:760px;margin:0 auto}
+button{font:inherit;color:inherit;cursor:pointer;border:0}
+.hidden{display:none!important}
+.muted{color:var(--muted)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+.top .t{font-family:'Unbounded',sans-serif;font-weight:800;font-size:15px}
+.top .t span{color:var(--accent)}
+.top .r{font-size:13px;color:var(--muted);font-weight:700;text-align:right}
+.conn{background:var(--bad);color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:999px;text-align:center;margin-bottom:10px}
+.status{font-size:20px;font-weight:800;margin:6px 0 12px}
+.card{background:var(--surface);border-radius:18px;padding:16px;margin-bottom:12px}
+.meta{font-size:13px;font-weight:700;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.meta b{color:var(--accent);font-family:'Unbounded',sans-serif}
+.qtext{font-size:19px;font-weight:700;line-height:1.3;margin:8px 0 12px}
+.ans{background:var(--surface2);border-radius:12px;padding:10px 14px}
+.ans small{display:block;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.ans div{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700;color:var(--good);margin-top:2px;line-height:1.2}
+.timer{height:6px;background:var(--surface2);border-radius:999px;overflow:hidden;margin-top:12px}
+.timer i{display:block;height:100%;background:var(--accent);transform-origin:left}
+.acts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+.acts button{background:var(--surface2);border-radius:14px;padding:16px 12px;font-weight:800;font-size:16px;text-align:center;line-height:1.2}
+.acts button:active{transform:scale(.97)}
+.acts .primary{background:var(--accent);color:#fff;grid-column:1/-1;font-size:19px;padding:20px}
+.acts .good{background:var(--good);color:#06291f;font-size:20px;padding:22px}
+.acts .bad{background:var(--bad);color:#fff;font-size:20px;padding:22px}
+.acts .pl{box-shadow:inset 0 4px 0 var(--c)}
+.acts .pl.on{background:var(--c);color:#111}
+.inputs{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.inputs label{display:flex;align-items:center;gap:10px;background:var(--surface);border-radius:12px;padding:10px 12px;font-weight:700}
+.inputs label span{flex:1}
+.inputs input{width:130px;background:var(--surface2);border:2px solid transparent;border-radius:10px;padding:10px;font:inherit;font-size:18px;color:inherit;text-align:center;outline:none}
+.inputs input:focus{border-color:var(--accent)}
+.board{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.brow{display:grid;grid-template-columns:minmax(90px,1.4fr) repeat(var(--n),1fr);gap:5px}
+.brow .th{font-weight:800;font-size:13px;display:flex;align-items:center;line-height:1.15}
+.brow button{background:var(--surface);border-radius:10px;padding:12px 2px;font-family:'Unbounded',sans-serif;font-weight:700;font-size:13px;color:var(--accent);position:relative}
+.brow button.used{background:transparent;color:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+.brow button em{position:absolute;top:1px;right:3px;font-style:normal;font-size:10px}
+.pls{display:flex;flex-direction:column;gap:6px}
+.pl-row{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:12px;padding:8px 10px;box-shadow:inset 4px 0 0 var(--c)}
+.pl-row .n{flex:1;font-weight:800}
+.pl-row .s{font-family:'Unbounded',sans-serif;font-size:16px;min-width:70px;text-align:right}
+.pl-row button{background:var(--surface2);border-radius:10px;width:54px;padding:9px 0;font-weight:800;font-size:13px}
+h4{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}
+.menu{display:flex;gap:8px;flex-wrap:wrap}
+.menu button{background:transparent;box-shadow:inset 0 0 0 1.5px var(--line);border-radius:10px;padding:9px 12px;font-weight:700;font-size:13px;color:var(--muted)}
+.pin-screen{display:flex;flex-direction:column;gap:12px;margin-top:40px}
+.pin-screen input{background:var(--surface2);border:2px solid transparent;border-radius:14px;padding:16px;font:inherit;font-size:28px;letter-spacing:.3em;text-align:center;color:inherit;outline:none}
+.pin-screen button{background:var(--accent);color:#fff;border-radius:14px;padding:16px;font-weight:800;font-size:18px}
+</style>
+</head>
+<body>
+<div class="top"><div class="t">ПУЛЬТ <span>ВЕДУЩЕГО</span></div><div class="r" id="title"></div></div>
+
+<div class="pin-screen hidden" id="pin-screen">
+  <div class="status">Код комнаты и PIN — на экране игры, в карточке «Ведущий»</div>
+  <div class="muted" id="pin-err"></div>
+  <input id="room" maxlength="8" autocomplete="off" placeholder="КОД" style="text-transform:uppercase">
+  <input id="pin" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="PIN">
+  <button id="pin-go">Подключиться</button>
+</div>
+
+<div id="main" class="hidden">
+  <div class="conn hidden" id="conn">Нет связи с игрой…</div>
+  <div class="status" id="status">Подключение…</div>
+  <div class="card hidden" id="q"></div>
+  <div class="inputs" id="inputs"></div>
+  <div class="acts" id="acts"></div>
+  <div class="board" id="board"></div>
+  <h4>Счёт</h4>
+  <div class="pls" id="pls"></div>
+  <h4>Игра</h4>
+  <div class="menu">
+    <button data-menu="skip-round" data-ask="Закончить текущий раунд?">⏭ Закончить раунд</button>
+    <button data-menu="go-final" data-ask="Перейти сразу в финал?">🏁 Сразу в финал</button>
+    <button data-menu="end-game" data-ask="Завершить игру и показать итоги?">🏆 Итоги</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = n => (n < 0 ? '−' : '') + Math.abs(Math.round(n || 0)).toLocaleString('ru-RU');
+const LSget = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const params = new URLSearchParams(location.search);
+let pin = params.get('pin') || LSget('svoyak-hostpin'), room = (params.get('room') || LSget('svoyak-hostroom') || '').toUpperCase();
+let es = null, st = null, inputsSig = '';
+
+function connect() {
+  if (!pin || !room) return showPin('');
+  try { localStorage.setItem('svoyak-hostpin', pin); localStorage.setItem('svoyak-hostroom', room); } catch { }
+  history.replaceState(null, '', `?room=${room}&pin=${pin}`);
+  $('#pin-screen').classList.add('hidden'); $('#main').classList.remove('hidden');
+  if (es) es.close();
+  es = new EventSource(`/events?role=panel&room=${encodeURIComponent(room)}&pin=${encodeURIComponent(pin)}`);
+  es.onopen = () => $('#conn').classList.add('hidden');
+  es.onerror = () => $('#conn').classList.remove('hidden');
+  es.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === 'badpin') { es.close(); es = null; showPin('Неверный PIN'); }
+    if (m.type === 'noroom') { es.close(); es = null; showPin('Комната не найдена — открой экран игры'); }
+    if (m.type === 'hoststate') { st = m.state; draw(); }
+  };
+}
+function showPin(err) {
+  $('#main').classList.add('hidden'); $('#pin-screen').classList.remove('hidden');
+  $('#pin-err').textContent = err; $('#pin').value = pin || ''; $('#room').value = room || '';
+}
+$('#pin-go').onclick = () => { pin = $('#pin').value.trim(); room = $('#room').value.trim().toUpperCase(); connect(); };
+
+function cmd(act, d) {
+  if (navigator.vibrate) navigator.vibrate(15);
+  fetch('/api/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ room, pin, act, d: d || {} }) })
+    .then(r => { if (r.status === 403) showPin('PIN устарел — введи новый с экрана'); }).catch(() => { });
+}
+
+function draw() {
+  $('#title').textContent = st.title || '';
+  $('#status').textContent = st.status || '';
+  // вопрос + ответ
+  const q = st.q, qe = $('#q');
+  qe.classList.toggle('hidden', !q);
+  if (q) {
+    const media = q.media ? { image: '🖼 на экране картинка', audio: '🔊 на экране звук', video: '🎬 на экране видео' }[q.media] : '';
+    qe.innerHTML = `<div class="meta"><span>${esc(q.theme)}</span>${q.value ? `<b>${esc(q.value)}</b>` : ''}${q.mod ? `<span>${esc(q.mod)}</span>` : ''}${media ? `<span>${media}</span>` : ''}</div>
+      <div class="qtext">${esc(q.text)}</div>
+      <div class="ans"><small>Ответ</small><div>${esc(q.answer)}</div></div>
+      <div class="timer ${st.timer ? '' : 'hidden'}" id="timer"><i></i></div>`;
+  }
+  // поля ввода (ставки)
+  const sig = st.inputs.map(i => i.a + i.id).join('|');
+  if (sig !== inputsSig) {
+    inputsSig = sig;
+    $('#inputs').innerHTML = st.inputs.map(i => `<label><span>${esc(i.label)}</span><input type="number" inputmode="numeric" data-a="${i.a}" data-id="${esc(i.id)}" value="${esc(i.value)}"></label>`).join('');
+  } else {
+    st.inputs.forEach(i => { const el = document.querySelector(`#inputs input[data-id="${CSS.escape(i.id)}"]`); if (el && document.activeElement !== el) el.value = i.value; });
+  }
+  // кнопки
+  $('#acts').innerHTML = st.actions.map((a, n) => {
+    const pl = a.k.match(/pl:(#[0-9a-f]+)/i), on = /\bon\b/.test(a.k);
+    const cls = pl ? 'pl' + (on ? ' on' : '') : a.k;
+    return `<button class="${cls}" ${pl ? `style="--c:${pl[1]}"` : ''} data-n="${n}">${esc(a.l)}</button>`;
+  }).join('');
+  // табло
+  $('#board').innerHTML = st.board ? st.board.map(t => `<div class="brow" style="--n:${t.cells.length}"><div class="th">${esc(t.name)}</div>${t.cells.map(c => `<button class="${c.used ? 'used' : ''}" data-open="${c.k}" ${c.used ? 'disabled' : ''}>${esc(c.v)}${c.mark && !c.used ? `<em>${c.mark}</em>` : ''}</button>`).join('')}</div>`).join('') : '';
+  // счёт
+  $('#pls').innerHTML = st.players.map(p => `<div class="pl-row" style="--c:${p.color}"><span class="n">${esc(p.name)} ${esc(p.badges.join(' '))}</span>
+    <button data-add="${p.id}" data-v="${-st.step}">−${st.step}</button><span class="s">${fmt(p.score)}</span><button data-add="${p.id}" data-v="${st.step}">+${st.step}</button></div>`).join('');
+  $('.menu').classList.toggle('hidden', !st.live);
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || !st) return;
+  if (b.dataset.n != null) { const a = st.actions[+b.dataset.n]; if (a) cmd(a.a, a.d); }
+  else if (b.dataset.open) cmd('open', { k: b.dataset.open });
+  else if (b.dataset.add) cmd('pm-add', { id: b.dataset.add, v: b.dataset.v });
+  else if (b.dataset.menu && confirm(b.dataset.ask)) cmd(b.dataset.menu);
+});
+document.addEventListener('change', e => {
+  const i = e.target; if (!i.dataset || !i.dataset.a) return;
+  if (i.dataset.a === 'auc-bid') cmd('auc-bid', { v: i.value });
+  else cmd(i.dataset.a, { id: i.dataset.id, v: i.value });
+});
+setInterval(() => {
+  const t = st && st.timer, el = document.querySelector('#timer i'); if (!t || !el) return;
+  el.style.transform = `scaleX(${Math.max(0, (t.end - Date.now()) / t.total)})`;
+}, 100);
+connect();
+</script>
+</body>
+</html>

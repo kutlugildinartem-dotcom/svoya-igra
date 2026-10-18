@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0f1015">
+<title>Игрок · Своя игра</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Unbounded:wght@700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1015;--surface:#181a22;--surface2:#21242f;--line:#2c303d;--text:#f2f3f7;--muted:#8b90a0;--accent:#7c6cff;--good:#2ad1a3;--bad:#ff5e6c;--gold:#f5c542;--c:#7c6cff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:'Manrope',system-ui,sans-serif;overscroll-behavior:none}
+body{display:flex;flex-direction:column}
+button{font:inherit;color:inherit;border:0;cursor:pointer}
+.hidden{display:none!important}
+.screen{flex:1;display:flex;flex-direction:column;padding:12px 14px 14px;gap:10px;min-height:0}
+h1{font-family:'Unbounded',sans-serif;font-size:26px;margin:24px 0 4px}
+h1 span{color:var(--accent)}
+.muted{color:var(--muted);font-size:14px}
+.inp{width:100%;background:var(--surface2);border:2px solid transparent;border-radius:14px;padding:14px 16px;font:inherit;font-size:20px;color:inherit;outline:none}
+.inp:focus{border-color:var(--accent)}
+.inp.code{text-transform:uppercase;letter-spacing:.3em;text-align:center;font-family:'Unbounded',sans-serif}
+.btn{width:100%;background:var(--accent);color:#fff;border-radius:14px;padding:16px;font-weight:800;font-size:18px}
+.err{color:var(--bad);font-weight:700;min-height:1.2em}
+.top{display:flex;justify-content:space-between;align-items:center;background:var(--surface);border-radius:16px;padding:10px 14px;box-shadow:inset 0 4px 0 var(--c)}
+.top .nm{font-weight:800;font-size:17px}
+.top .sc{font-family:'Unbounded',sans-serif;font-size:20px}
+.mini{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.mini span{flex:none;background:var(--surface);border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;box-shadow:inset 3px 0 0 var(--pc)}
+.view{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.qcard{background:var(--surface);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.meta{font-size:13px;font-weight:800;color:var(--muted)}
+.meta b{color:var(--accent);font-family:'Unbounded',sans-serif}
+.qtext{font-size:21px;font-weight:800;line-height:1.25}
+.qtext.emoji{font-size:44px;letter-spacing:.1em;text-align:center}
+.qmedia img,.qmedia video{width:100%;max-height:34vh;object-fit:contain;border-radius:12px;background:#000}
+.qmedia audio{width:100%}
+.ans{font-family:'Unbounded',sans-serif;font-size:22px;color:var(--accent);line-height:1.2}
+.status{text-align:center;font-weight:800;font-size:18px;color:var(--muted);padding:2px 6px}
+.board{display:flex;flex-direction:column;gap:5px}
+.brow{display:grid;grid-template-columns:minmax(80px,1.3fr) repeat(var(--n),1fr);gap:4px}
+.brow .th{font-weight:800;font-size:12px;display:flex;align-items:center;line-height:1.1}
+.brow button{background:var(--surface);border-radius:9px;padding:11px 0;font-family:'Unbounded',sans-serif;font-weight:700;font-size:12px;color:var(--accent)}
+.brow button.used{background:transparent;color:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+.board.mine button:not(.used){background:var(--accent);color:#fff}
+.buzz{flex:none;height:34vh;min-height:160px;border-radius:32px;background:var(--surface2);color:var(--muted);font-family:'Unbounded',sans-serif;font-weight:800;font-size:clamp(30px,10vw,56px);transition:background .15s,transform .08s,color .15s;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.buzz.armed{background:var(--good);color:#06291f}
+.buzz.grab{background:var(--gold);color:#2b2000}
+.buzz.me{background:var(--c);color:#111}
+.buzz.join{background:var(--accent);color:#fff}
+.buzz.down{transform:scale(.96);filter:brightness(1.2)}
+.ways{display:flex;gap:6px}
+.ways button{flex:1;background:var(--surface);border-radius:12px;padding:9px 4px;font-size:13px;font-weight:700;color:var(--muted)}
+.ways button.on{background:color-mix(in srgb,var(--accent) 25%,var(--surface));color:var(--text);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.panel{background:var(--surface);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.panel b{font-size:17px}
+.conn{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:var(--bad);color:#fff;font-weight:800;font-size:13px;padding:4px 12px;border-radius:999px;z-index:5}
+.flash{animation:flash .35s}
+@keyframes flash{50%{box-shadow:0 0 0 6px var(--accent)}}
+</style>
+</head>
+<body>
+<div class="conn hidden" id="conn">Нет связи…</div>
+
+<div class="screen" id="login">
+  <h1>СВОЯ<span>ИГРА</span></h1>
+  <div class="muted">Введи код комнаты с экрана игры и своё имя.</div>
+  <input class="inp code" id="room" maxlength="8" placeholder="КОД" autocomplete="off" autocapitalize="characters">
+  <input class="inp" id="name" maxlength="20" placeholder="Имя" autocomplete="off">
+  <div class="err" id="err"></div>
+  <button class="btn" id="go">Играть</button>
+</div>
+
+<div class="screen hidden" id="main">
+  <div class="top"><div class="nm" id="me-name"></div><div class="sc" id="me-score"></div></div>
+  <div class="mini" id="mini"></div>
+  <div class="view" id="view"></div>
+  <div class="status" id="status">Подключение…</div>
+  <button class="buzz" id="buzz">ЖМИ</button>
+  <div class="ways">
+    <button class="on" disabled>👆 Экран</button>
+    <button id="w-shake">📳 Тряска</button>
+    <button id="w-head">🎧 Наушники</button>
+  </div>
+  <div class="panel hidden" id="bet">
+    <b>Финал: твоя ставка</b><div class="muted" id="bet-hint"></div>
+    <input class="inp" id="bet-v" type="number" inputmode="numeric" placeholder="Ставка">
+    <button class="btn" id="bet-send">Отправить тайно</button>
+  </div>
+  <div class="panel hidden" id="fans">
+    <b>Финал: твой ответ</b>
+    <input class="inp" id="fans-v" maxlength="200" placeholder="Ответ" autocomplete="off">
+    <button class="btn" id="fans-send">Отправить</button>
+  </div>
+  <button style="background:none;color:var(--muted);font-size:13px;padding:4px" id="leave">Сменить имя или комнату</button>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = n => (n < 0 ? '−' : '') + Math.abs(Math.round(n || 0)).toLocaleString('ru-RU');
+const EMOJI_RE = /^[\s\p{Extended_Pictographic}‍️\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}]+$/u;
+const LS = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { } } };
+let myId = LS.get('svoyak-pid');
+if (!myId) { myId = Math.random().toString(36).slice(2, 12); LS.set('svoyak-pid', myId); }
+const qs = new URLSearchParams(location.search);
+let room = (qs.get('room') || LS.get('svoyak-proom') || '').toUpperCase(), myName = LS.get('svoyak-pname') || '';
+let es = null, state = null, sentBet = false, sentAns = false, prevPhase = '', mediaKey = '';
+
+$('#room').value = room; $('#name').value = myName;
+if (qs.get('room')) setTimeout(() => $('#name').focus(), 50);
+$('#go').onclick = async () => {
+  const r = $('#room').value.trim().toUpperCase(), n = $('#name').value.trim();
+  if (!r) return $('#room').focus();
+  if (!n) return $('#name').focus();
+  try { const j = await (await fetch('/api/room?code=' + encodeURIComponent(r))).json(); if (!j.exists) { $('#err').textContent = 'Комната ' + r + ' не найдена. Проверь код на экране игры.'; return; } } catch { }
+  room = r; myName = n; LS.set('svoyak-proom', r); LS.set('svoyak-pname', n);
+  history.replaceState(null, '', '?room=' + r);
+  start();
+};
+$('#name').onkeydown = e => { if (e.key === 'Enter') $('#go').click(); };
+$('#leave').onclick = () => { if (es) es.close(); es = null; $('#main').classList.add('hidden'); $('#login').classList.remove('hidden'); };
+
+function send(obj) {
+  obj.id = myId; obj.room = room;
+  return fetch('/api/player', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj), keepalive: true }).catch(() => { });
+}
+function start() {
+  $('#err').textContent = '';
+  $('#login').classList.add('hidden'); $('#main').classList.remove('hidden');
+  if (es) es.close();
+  es = new EventSource(`/events?role=player&room=${encodeURIComponent(room)}&id=${encodeURIComponent(myId)}&name=${encodeURIComponent(myName)}`);
+  es.onopen = () => $('#conn').classList.add('hidden');
+  es.onerror = () => $('#conn').classList.remove('hidden');
+  es.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === 'noroom') { es.close(); es = null; $('#main').classList.add('hidden'); $('#login').classList.remove('hidden'); $('#err').textContent = 'Комната не найдена или игра закрыта.'; }
+    if (m.type === 'state') { state = m.state; draw(); }
+  };
+  keepAwake();
+  draw();
+}
+
+/* ---------- нажатие: экран, тряска, кнопка наушников ---------- */
+const btn = $('#buzz');
+function press(src) {
+  const ph = state ? state.phase : '';
+  if (src !== 'tap' && !(ph === 'armed' || ph === 'grab' || (state && state.capture))) return;  // тряска не даёт фальстартов
+  btn.classList.add('down'); setTimeout(() => btn.classList.remove('down'), 150);
+  if (navigator.vibrate) navigator.vibrate(30);
+  send({ type: 'buzz', via: src });
+}
+btn.addEventListener('pointerdown', e => { e.preventDefault(); press('tap'); });
+btn.addEventListener('contextmenu', e => e.preventDefault());
+
+let shakeOn = false, prevA = null, lastShake = 0;
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity || e.acceleration; if (!a || a.x == null) return;
+  if (prevA) {
+    const d = Math.abs(a.x - prevA.x) + Math.abs(a.y - prevA.y) + Math.abs(a.z - prevA.z);
+    if (d > 30 && Date.now() - lastShake > 800) { lastShake = Date.now(); press('shake'); }
+  }
+  prevA = { x: a.x, y: a.y, z: a.z };
+}
+$('#w-shake').onclick = async () => {
+  if (shakeOn) { window.removeEventListener('devicemotion', onMotion); shakeOn = false; return drawWays(); }
+  if (!window.isSecureContext || !('DeviceMotionEvent' in window)) return alert('Тряска работает только по защищённой ссылке (https://…). Открой игру через интернет-ссылку.');
+  try { if (typeof DeviceMotionEvent.requestPermission === 'function' && await DeviceMotionEvent.requestPermission() !== 'granted') return alert('Нет доступа к датчику движения'); } catch { }
+  window.addEventListener('devicemotion', onMotion); shakeOn = true; drawWays();
+};
+let headAudio = null;
+function silentWav(sec) {
+  const rate = 8000, n = rate * sec, buf = new Uint8Array(44 + n), v = new DataView(buf.buffer);
+  const w = (o, s) => [...s].forEach((c, i) => buf[o + i] = c.charCodeAt(0));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+  buf.fill(128, 44);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+$('#w-head').onclick = () => {
+  if (headAudio) { headAudio.pause(); headAudio = null; return drawWays(); }
+  if (!('mediaSession' in navigator)) return alert('Этот браузер не поддерживает кнопки наушников');
+  headAudio = new Audio(silentWav(10)); headAudio.loop = true;
+  headAudio.play().catch(() => { });
+  try { navigator.mediaSession.metadata = new MediaMetadata({ title: 'Своя игра — кнопка', artist: myName }); } catch { }
+  ['play', 'pause', 'nexttrack', 'previoustrack', 'seekforward', 'seekbackward'].forEach(a => {
+    try { navigator.mediaSession.setActionHandler(a, () => { press('headset'); if (headAudio && headAudio.paused) headAudio.play().catch(() => { }); }); } catch { }
+  });
+  drawWays();
+};
+function drawWays() { $('#w-shake').classList.toggle('on', shakeOn); $('#w-head').classList.toggle('on', !!headAudio); }
+async function keepAwake() { try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { } }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && es) keepAwake(); });
+
+$('#bet-send').onclick = () => { const v = Number($('#bet-v').value); if (!v) return; send({ type: 'bet', value: v }); sentBet = true; draw(); };
+$('#fans-send').onclick = () => { const v = $('#fans-v').value.trim(); if (!v) return; send({ type: 'answer', text: v }); sentAns = true; draw(); };
+$('#view').addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b && !b.disabled) { send({ type: 'pick', k: b.dataset.k }); if (navigator.vibrate) navigator.vibrate(20); } });
+
+/* ---------- отрисовка ---------- */
+async function loadMedia(id, el) {
+  try {
+    const m = await (await fetch(`/api/media?room=${room}&id=${encodeURIComponent(id)}`)).json();
+    if (!m || !m.src) return;
+    const src = esc(m.src);
+    el.innerHTML = m.kind === 'audio' ? `<audio src="${src}" controls></audio>` : m.kind === 'video' ? `<video src="${src}" controls playsinline></video>` : `<img src="${src}" alt="">`;
+  } catch { }
+}
+function draw() {
+  const me = state && state.players.find(p => p.binding === 'phone:' + myId);
+  $('#me-name').textContent = me ? me.name : myName;
+  $('#me-score').textContent = me ? fmt(me.score) : '';
+  document.documentElement.style.setProperty('--c', me ? me.color : '#7c6cff');
+  $('#mini').innerHTML = state ? state.players.filter(p => p !== me).map(p => `<span style="--pc:${p.color}">${esc(p.name)} ${fmt(p.score)}</span>`).join('') : '';
+
+  // вопрос / табло
+  const v = $('#view'), q = state && state.q;
+  const key = q ? `q${q.id}${q.view}${q.answer ? 1 : 0}${q.modText || ''}` : state && state.board ? 'b' + JSON.stringify(state.board) + state.chooser : 'none' + (state ? state.title : '');
+  if (key !== mediaKey) {
+    mediaKey = key;
+    if (q) {
+      const head = `<div class="meta">${esc(q.theme)} ${q.value ? `<b>${esc(q.value)}</b>` : ''} ${q.type === 'cat' ? '🐱' : q.type === 'auction' ? '🔨' : q.type === 'closest' ? '🎯' : ''}</div>`;
+      const body = q.text ? `<div class="qtext ${EMOJI_RE.test(q.text.trim()) ? 'emoji' : ''}">${esc(q.text)}</div>` : q.mod ? `<div class="qtext">✨ ${esc(q.mod)}</div>${q.modText ? `<div>${esc(q.modText)}</div>` : ''}` : `<div class="qtext muted">${{ 'cat-pick': '🐱 Кот в мешке!', 'cat-reveal': '🐱 Кот в мешке', auction: '🔨 Аукцион — торгуйтесь!' }[q.view] || '…'}</div>`;
+      v.innerHTML = `<div class="qcard">${head}${body}<div class="qmedia" id="qm"></div>${q.answer ? `<div class="ans">${esc(q.answer)}</div><div class="qmedia" id="am"></div>` : ''}</div>`;
+      if (q.media) loadMedia(q.media, $('#qm'));
+      if (q.ansMedia) loadMedia(q.ansMedia, $('#am'));
+    } else if (state && state.board) {
+      const mine = me && state.chooser === me.id;
+      v.innerHTML = `<div class="board ${mine ? 'mine' : ''}">${state.board.map(t => `<div class="brow" style="--n:${t.cells.length}"><div class="th">${esc(t.name)}</div>${t.cells.map(c => `<button class="${c.used ? 'used' : ''}" ${c.used || !mine ? 'disabled' : ''} data-k="${c.k}">${esc(c.v)}</button>`).join('')}</div>`).join('')}</div>`;
+    } else v.innerHTML = state && state.title ? `<div class="qcard"><div class="qtext muted">${esc(state.title)}</div></div>` : '';
+  }
+
+  // кнопка
+  let cls = '', label = 'ЖМИ', status = 'Ждём вопрос';
+  const ph = state ? state.phase : 'idle';
+  const name = id => { const p = state.players.find(x => x.id === id); return p ? p.name : ''; };
+  if (!state) status = 'Подключение…';
+  else if (!me) {
+    if (state.capture) { cls = 'join'; label = 'Я ТУТ'; status = 'Нажми, чтобы ведущий привязал кнопку к тебе'; }
+    else { status = 'Ждём, пока ведущий добавит тебя в игру'; label = '…'; }
+  } else if (ph === 'grab') { cls = 'grab'; label = 'ХВАТАЙ!'; status = 'Модификатор! Кто первый — того и тапки'; }
+  else if (ph === 'wait') { status = 'Сейчас будет модификатор…'; label = 'ЖДИ'; }
+  else if (ph === 'closest') { status = 'Отвечают все по очереди — вслух'; label = '🎯'; }
+  else if (state.only && (ph === 'reading' || ph === 'answering')) {
+    if (state.only === me.id) { cls = 'me'; label = 'ТВОЙ'; status = 'Этот вопрос только для тебя'; }
+    else { label = '—'; status = 'Отвечает ' + name(state.only); }
+  }
+  else if (ph === 'armed') { if (state.tried.includes(me.id)) { label = '—'; status = 'Попытка использована'; } else { cls = 'armed'; label = 'ЖМИ!'; status = 'Можно отвечать!'; } }
+  else if (ph === 'reading') { label = 'ЖДИ'; status = 'Слушай вопрос. Нажмёшь раньше — фальстарт'; }
+  else if (ph === 'answering') {
+    if (state.answering === me.id) { cls = 'me'; label = 'ОТВЕЧАЙ'; status = 'Ты первый! Говори ответ'; }
+    else { label = '—'; status = 'Отвечает ' + name(state.answering); }
+  }
+  else if (ph === 'final-bet' || ph === 'final-answer') { status = state.final && state.final.parts.includes(me.id) ? 'Финал!' : 'Ты не прошёл в финал — болей за остальных'; label = 'ФИНАЛ'; }
+  else if (state.board && state.chooser === me.id) status = 'Твой выбор — нажми клетку на табло';
+  else if (state.board && state.chooser) status = name(state.chooser) + ' выбирает вопрос';
+  btn.className = 'buzz ' + cls;
+  btn.textContent = label;
+  $('#status').textContent = status;
+  if (ph !== prevPhase && (ph === 'armed' || ph === 'grab') && navigator.vibrate) navigator.vibrate([60, 40, 60]);
+  if (ph !== prevPhase) { if (ph === 'final-bet') sentBet = false; if (ph === 'final-answer') sentAns = false; }
+  prevPhase = ph;
+
+  const inFinal = me && state.final && state.final.parts.includes(me.id);
+  const betSent = sentBet || (inFinal && state.final.bets.includes(me.id));
+  $('#bet').classList.toggle('hidden', !(inFinal && ph === 'final-bet'));
+  $('#bet-hint').textContent = betSent ? '✓ Ставка у ведущего. Можно поменять и отправить ещё раз.' : me ? `От 1 до ${fmt(Math.max(1, me.score))}` : '';
+  $('#fans').classList.toggle('hidden', !(inFinal && ph === 'final-answer'));
+  $('#fans-send').textContent = sentAns ? '✓ Отправлено (можно исправить)' : 'Отправить';
+  const fin = ph === 'final-bet' || ph === 'final-answer';
+  btn.classList.toggle('hidden', fin);
+  document.querySelector('.ways').classList.toggle('hidden', fin);
+}
+drawWays();
+if (room && myName && qs.get('room') !== null && LS.get('svoyak-proom') === room) start();
+</script>
+</body>
+</html>

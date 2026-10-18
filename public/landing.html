@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1015">
+<title>Своя игра</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Unbounded:wght@700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1015;--surface:#181a22;--surface2:#21242f;--text:#f2f3f7;--muted:#8b90a0;--accent:#7c6cff;--bad:#ff5e6c}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:'Manrope',system-ui,sans-serif}
+body{display:flex;flex-direction:column;align-items:center;padding:48px 16px}
+.logo{font-family:'Unbounded',sans-serif;font-weight:800;font-size:clamp(34px,8vw,64px);letter-spacing:.02em}
+.logo span{color:var(--accent);margin-left:10px}
+.sub{color:var(--muted);margin:8px 0 36px;text-align:center}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;width:min(960px,100%)}
+.card{background:var(--surface);border-radius:22px;padding:22px;display:flex;flex-direction:column;gap:12px}
+.card .e{font-size:40px}
+.card h2{font-family:'Unbounded',sans-serif;font-size:19px;margin:0}
+.card p{color:var(--muted);margin:0;font-size:14px;line-height:1.45;flex:1}
+input{width:100%;background:var(--surface2);border:2px solid transparent;border-radius:12px;padding:12px 14px;font:inherit;font-size:18px;color:inherit;outline:none}
+input:focus{border-color:var(--accent)}
+input.code{text-transform:uppercase;letter-spacing:.3em;text-align:center;font-family:'Unbounded',sans-serif}
+a.btn,button{display:block;text-align:center;background:var(--accent);color:#fff;border:0;border-radius:12px;padding:14px;font:inherit;font-weight:800;font-size:17px;text-decoration:none;cursor:pointer}
+.err{color:var(--bad);font-size:14px;font-weight:700;min-height:1em}
+</style>
+</head>
+<body>
+<div class="logo">СВОЯ<span>ИГРА</span></div>
+<div class="sub">Викторина для компании от 2 до 8 человек — с любого устройства</div>
+<div class="cards">
+  <div class="card">
+    <div class="e">📺</div><h2>Создать игру</h2>
+    <p>Открой на ноутбуке или телевизоре — это главный экран с табло. Здесь появится код комнаты для игроков и ведущего.</p>
+    <a class="btn" href="/screen">Создать</a>
+  </div>
+  <div class="card">
+    <div class="e">🎮</div><h2>Я игрок</h2>
+    <p>Введи код комнаты с экрана игры. Телефон станет твоей кнопкой: жми, тряси или нажимай кнопку на наушниках.</p>
+    <input class="code" id="p-room" maxlength="8" placeholder="КОД" autocomplete="off">
+    <div class="err" id="p-err"></div>
+    <button id="p-go">Войти</button>
+  </div>
+  <div class="card">
+    <div class="e">🎤</div><h2>Я ведущий</h2>
+    <p>Пульт с ответами, табло и кнопками «Верно/Неверно». Код и PIN — на экране игры в карточке «Ведущий».</p>
+    <input class="code" id="h-room" maxlength="8" placeholder="КОД" autocomplete="off">
+    <input id="h-pin" inputmode="numeric" maxlength="6" placeholder="PIN" autocomplete="off" style="text-align:center">
+    <div class="err" id="h-err"></div>
+    <button id="h-go">Открыть пульт</button>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+async function exists(code) { try { return (await (await fetch('/api/room?code=' + encodeURIComponent(code))).json()).exists; } catch { return true; } }
+$('#p-go').onclick = async () => {
+  const c = $('#p-room').value.trim().toUpperCase(); if (!c) return $('#p-room').focus();
+  if (!await exists(c)) return $('#p-err').textContent = 'Комната ' + c + ' не найдена';
+  location.href = '/p?room=' + c;
+};
+$('#h-go').onclick = async () => {
+  const c = $('#h-room').value.trim().toUpperCase(), p = $('#h-pin').value.trim();
+  if (!c) return $('#h-room').focus(); if (!p) return $('#h-pin').focus();
+  if (!await exists(c)) return $('#h-err').textContent = 'Комната ' + c + ' не найдена';
+  location.href = `/host?room=${c}&pin=${p}`;
+};
+$('#p-room').onkeydown = e => { if (e.key === 'Enter') $('#p-go').click(); };
+$('#h-pin').onkeydown = e => { if (e.key === 'Enter') $('#h-go').click(); };
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: svoya-igra
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: node server.js
+    healthCheckPath: /api/info
+    autoDeploy: true
