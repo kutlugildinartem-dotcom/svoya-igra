@@ -31,7 +31,7 @@ setInterval(() => {   // пустые комнаты живут час
    Хранится в data/registry.json, а если заданы GITHUB_TOKEN и GITHUB_REPO — ещё и в ветке GitHub
    (бесплатный Render стирает файлы при перезапуске, GitHub — нет). */
 const REG_FILE = path.join(__dirname, 'data', 'registry.json');
-const GH = { token: process.env.GITHUB_TOKEN || '', repo: process.env.GITHUB_REPO || '', branch: process.env.GITHUB_BRANCH || 'registry', file: 'registry.json', sha: null, ok: false };
+const GH = { token: process.env.GITHUB_TOKEN || '', repo: process.env.GITHUB_REPO || 'kutlugildinartem-dotcom/svoya-igra', branch: process.env.GITHUB_BRANCH || 'registry', file: 'registry.json', sha: null, ok: false };
 let registry = { themes: [], questions: [], seeded: false };
 const regStorage = () => (GH.ok ? 'github' : 'file');
 
@@ -48,21 +48,46 @@ async function ghEnsureBranch() {
   const r = await gh('POST', `/repos/${GH.repo}/git/refs`, { ref: 'refs/heads/' + GH.branch, sha: main.object.sha });
   if (!r.ok) throw new Error('не удалось создать ветку ' + GH.branch + ': ' + r.status);
 }
+async function loadFromGithub() {   // null — в ветке ещё нет файла
+  await ghEnsureBranch();
+  const url = `/repos/${GH.repo}/contents/${GH.file}?ref=${GH.branch}`;
+  const meta = await gh('GET', url);
+  if (meta.status === 404) return null;
+  if (!meta.ok) throw new Error('GitHub ответил ' + meta.status);
+  GH.sha = (await meta.json()).sha;
+  return JSON.parse(await (await gh('GET', url, null, true)).text());
+}
 async function loadRegistry() {
   let loaded = null;
   if (GH.token && GH.repo) {
-    try {
-      await ghEnsureBranch();
-      const url = `/repos/${GH.repo}/contents/${GH.file}?ref=${GH.branch}`;
-      const meta = await gh('GET', url);
-      if (meta.ok) { GH.sha = (await meta.json()).sha; loaded = JSON.parse(await (await gh('GET', url, null, true)).text()); }
-      else if (meta.status !== 404) throw new Error('GitHub ответил ' + meta.status);
-      GH.ok = true;
-      console.log('  Реестр: GitHub ' + GH.repo + ' (ветка ' + GH.branch + ')');
-    } catch (e) { console.warn('  Реестр: GitHub недоступен —', e.message); }
+    try { loaded = await loadFromGithub(); GH.ok = true; console.log('  Реестр: GitHub ' + GH.repo + ' (ветка ' + GH.branch + ')'); }
+    catch (e) { console.warn('  Реестр: GitHub недоступен —', e.message); }
   }
   if (!loaded) { try { loaded = JSON.parse(fs.readFileSync(REG_FILE, 'utf8')); } catch { } }
   if (loaded && Array.isArray(loaded.themes)) registry = Object.assign({ themes: [], questions: [], seeded: false }, loaded);
+}
+/* ключ GitHub может прийти с экрана игры (хранится в браузере ведущего), если его нет в настройках сервера */
+let connecting = null;
+async function connectGithub(token) {
+  token = String(token || '').trim();
+  if (!token) throw new Error('Пустой ключ');
+  if (GH.ok && GH.token === token) return;
+  const r = await fetch('https://api.github.com/repos/' + GH.repo, { headers: { Authorization: 'Bearer ' + token, 'User-Agent': 'svoya-igra' } });
+  if (!r.ok) throw new Error('GitHub не принял ключ (' + r.status + ')');
+  if (!((await r.json()).permissions || {}).push) throw new Error('Ключ не даёт права записи в ' + GH.repo);
+  const temp = registry, prevToken = GH.token;
+  GH.token = token;
+  try {
+    const loaded = await loadFromGithub();
+    if (loaded && Array.isArray(loaded.themes)) {
+      registry = Object.assign({ themes: [], questions: [], seeded: false }, loaded);
+      regApply(registry, { op: 'import', themes: temp.themes, questions: temp.questions });   // ничего не теряем из временного реестра
+      registry.seeded = registry.seeded || temp.seeded;
+    }
+    GH.ok = true;
+    console.log('  Реестр подключён к GitHub ' + GH.repo);
+    saveRegistry();
+  } catch (e) { GH.token = prevToken; throw e; }
 }
 let regTimer = null, regChain = Promise.resolve();
 function saveRegistry() {
@@ -193,6 +218,10 @@ const server = http.createServer((req, res) => {
     if (req.method !== 'POST') return regReply(res, 200, null);
     return readBody(req, 40e6, b => {
       if (!b) return json(res, 400, { error: 'Слишком большой или битый запрос' });
+      if (b.op === 'connect') {
+        connecting = (connecting || Promise.resolve()).then(() => connectGithub(b.token));
+        return connecting.then(() => regReply(res, 200, 'connected'), e => json(res, 400, { error: e.message })).finally(() => { connecting = null; });
+      }
       try { const result = regApply(registry, b); if (result !== 'exists') saveRegistry(); regReply(res, 200, result); }
       catch (e) { json(res, 400, { error: e.message }); }
     });

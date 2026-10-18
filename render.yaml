@@ -7,10 +7,3 @@ services:
     startCommand: node server.js
     healthCheckPath: /api/info
     autoDeploy: true
-    envVars:
-      - key: GITHUB_REPO
-        value: kutlugildinartem-dotcom/svoya-igra
-      - key: GITHUB_BRANCH
-        value: registry
-      - key: GITHUB_TOKEN
-        sync: false

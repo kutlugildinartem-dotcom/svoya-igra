@@ -1167,9 +1167,13 @@ function regApplyLocal(reg, b) {   // то же, что regApply на серве
 }
 function regSet(j) { REG.data = { themes: j.themes || [], questions: j.questions || [], seeded: !!j.seeded }; REG.storage = j.storage; REG.persistent = !!j.persistent; }
 async function regLocal() { REG.data = (await DB.get('registry')) || { themes: [], questions: [], seeded: false }; REG.storage = 'browser'; REG.persistent = true; }
+const ghToken = () => { try { return localStorage.getItem('svoyak-ghtoken') || ''; } catch { return ''; } };
 async function regLoad() {
   if (NET.online) { try { regSet(await (await fetch('/api/registry')).json()); } catch { await regLocal(); } }
   else await regLocal();
+  if (REG.storage === 'file' && ghToken()) {   // сервер без ключа — отдаём ему ключ из этого браузера
+    try { await regOp({ op: 'connect', token: ghToken() }); } catch (e) { console.warn('GitHub:', e.message); }
+  }
   if (!REG.data.seeded) await regOp({ op: 'seed', themes: seedThemes() });
 }
 const regReady = () => (REG.data ? Promise.resolve() : (REG.loading = REG.loading || regLoad().catch(e => { REG.loading = null; throw e; })));
@@ -1211,6 +1215,7 @@ async function regModal() {
     || '<p class="hint">Отдельных вопросов пока нет. Открой клетку в раунде и нажми «💾 В реестр».</p>';
   modal(`<div class="bank-head"><h3>🗂 Реестр тем и вопросов</h3><button class="icon" data-act="modal-close">✕</button></div>
     <div class="reg-status ${REG.persistent ? '' : 'warn'}">${esc(regStatusText())}</div>
+    ${!REG.persistent && REG.storage === 'file' ? `<div class="row gap" style="margin-top:8px"><input class="inp" id="reg-token" type="password" autocomplete="off" placeholder="Ключ GitHub (github_pat_…) — чтобы реестр хранился навсегда" style="flex:1"><button class="btn sm" data-act="ed-regconnect">Подключить</button></div>` : ''}
     <div class="row wrap gap" style="margin:10px 0">
       <button class="seg-b ${REG.tab === 'themes' ? 'on' : ''}" data-act="ed-regtab" data-v="themes">Темы · ${R.themes.length}</button>
       <button class="seg-b ${REG.tab === 'questions' ? 'on' : ''}" data-act="ed-regtab" data-v="questions">Вопросы · ${R.questions.length}</button>
@@ -1229,6 +1234,14 @@ async function regAct(a, d) {
     if (a !== 'ed-reg') await regReady();
     switch (a) {
       case 'ed-reg': return regModal();
+      case 'ed-regconnect': {
+        const t = ($('#reg-token') || {}).value || '';
+        if (!t.trim()) return toast('Вставь ключ GitHub');
+        await regOp({ op: 'connect', token: t.trim() });
+        try { localStorage.setItem('svoyak-ghtoken', t.trim()); } catch { }
+        toast('Реестр подключён к GitHub — теперь он хранится навсегда');
+        return regModal();
+      }
       case 'ed-regtab': REG.tab = d.v; return regModal();
       case 'ed-regtheme': {
         const t = pk.rounds[+d.r].themes[+d.t];
@@ -1560,6 +1573,9 @@ document.addEventListener('paste', e => {
 
 /* =================== старт =================== */
 (async function init() {
+  // ключ GitHub можно передать ссылкой …/screen#ghtoken=… — он сохранится только в этом браузере
+  const m = location.hash.match(/ghtoken=([\w-]+)/);
+  if (m) { try { localStorage.setItem('svoyak-ghtoken', m[1]); } catch { } history.replaceState(null, '', location.pathname + location.search); }
   const stored = await DB.get('pack'), def = window.DEFAULT_PACK;
   const oldBuiltin = stored && (stored.builtin || ((stored.version || 1) === 1 && stored.name === def.name));
   const useDefault = !stored || (oldBuiltin && (stored.version || 1) < def.version);
@@ -1568,4 +1584,5 @@ document.addEventListener('paste', e => {
   connectNet();
   requestAnimationFrame(pollGamepads);
   render();
+  if (NET.online && ghToken()) regReady().catch(() => { });   // после перезапуска сервера сразу возвращаем ему хранилище
 })();
