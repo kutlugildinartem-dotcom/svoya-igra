@@ -1193,7 +1193,7 @@ function regStatusText() {
   if (REG.storage === 'browser') return '💻 Реестр хранится только в этом браузере';
   return /^(localhost|127\.0\.0\.1)$/.test(location.hostname) || /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname)
     ? '💾 Реестр хранится на этом компьютере (data/registry.json)'
-    : '⚠ Временный реестр: сотрётся при перезапуске сервера. Добавь GITHUB_TOKEN в настройках Render — и он будет сохраняться навсегда';
+    : '⚠ Хранилище GitHub на этом устройстве не подключено — новое сохранится только до перезапуска сайта. Вставь ключ GitHub ниже и нажми «Подключить» (один раз на этом устройстве).';
 }
 function filterReg(v) {
   v = v.trim().toLowerCase();

@@ -63,6 +63,12 @@ async function loadRegistry() {
     try { loaded = await loadFromGithub(); GH.ok = true; console.log('  Реестр: GitHub ' + GH.repo + ' (ветка ' + GH.branch + ')'); }
     catch (e) { console.warn('  Реестр: GitHub недоступен —', e.message); }
   }
+  if (!loaded && GH.repo) {   // без ключа читаем публичную копию — реестр не будет пустым после перезапуска
+    try {
+      const r = await fetch(`https://raw.githubusercontent.com/${GH.repo}/${GH.branch}/${GH.file}?t=${Date.now()}`);
+      if (r.ok) { loaded = await r.json(); console.log('  Реестр загружен из GitHub (только чтение, ждём ключ для записи)'); }
+    } catch (e) { console.warn('  Реестр: не удалось прочитать GitHub —', e.message); }
+  }
   if (!loaded) { try { loaded = JSON.parse(fs.readFileSync(REG_FILE, 'utf8')); } catch { } }
   if (loaded && Array.isArray(loaded.themes)) registry = Object.assign({ themes: [], questions: [], seeded: false }, loaded);
 }
