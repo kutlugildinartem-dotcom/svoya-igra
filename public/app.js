@@ -272,7 +272,7 @@ function netState() {
         answer: Q.view === 'answer' ? (Q.q.answer || '—') : null,
         media: shown && Q.q.media && Q.q.media.src ? Q.id : null,
         ansMedia: Q.view === 'answer' && Q.q.answerMedia && Q.q.answerMedia.src ? Q.id + 'a' : null,
-        mod: m ? (m.hidden && Q.view === 'grab' ? '❓ Мистери-бокс' : `${m.emoji} ${m.name}`) : null,
+        mod: m ? (Q.view === 'grab' ? '❓ Модификатор! Что внутри — узнаешь, если схватишь' : `${m.emoji} ${m.name}`) : null,
         modText: Q.view === 'mod-result' ? Q.modText : null,
       };
     } else if (G.phase === 'board') {
@@ -633,20 +633,20 @@ function targetPrompt(m) {
 function questionHTML() {
   const q = Q.q;
   switch (Q.view) {
-    case 'grab': {
-      const m = modById(Q.modId), hid = m.hidden;
+    case 'grab':   // что внутри — не показываем никому, пока кто-то не схватит
       return `<div class="center">${metaHTML()}
-        <div class="mod-card"><div class="e">${hid ? '❓' : esc(m.emoji)}</div><div class="n">${hid ? 'Мистери-бокс' : esc(m.name)}</div><div class="d">${hid ? 'Что внутри — узнает тот, кто схватит' : esc(m.desc)}</div></div>
+        <div class="mod-card mystery"><div class="e">❓</div><div class="n">Модификатор!</div><div class="d">Что внутри — узнает тот, кто нажмёт первым</div></div>
         <div class="status" id="status"></div><div class="controls" id="controls"></div></div>`;
-    }
     case 'mod-target': {
       const m = modById(Q.modId), owner = player(Q.modOwner), def = MOD_TYPES[m.type];
-      return `<div class="center"><div class="mod-card"><div class="e">${esc(m.emoji)}</div><div class="n">${esc(m.name)}</div><div class="d">${esc(m.desc)}</div></div>
+      return `<div class="center"><div class="status">${whoHTML(owner)} забирает модификатор…</div>
+        <div class="mod-card reveal"><div class="e">${esc(m.emoji)}</div><div class="n">${esc(m.name)}</div><div class="d">${esc(m.desc)}</div></div>
         <div class="status">${whoHTML(owner)}, ${targetPrompt(m)}</div>${pickHTML(S.players.filter(p => def.target === 'any' || p.id !== owner.id), 'mod-target')}</div>`;
     }
     case 'mod-result': {
-      const m = modById(Q.modId);
-      return `<div class="center"><div class="mod-card"><div class="e">${esc(m.emoji)}</div><div class="n">${esc(m.name)}</div><div class="d" style="color:var(--text)">${esc(Q.modText)}</div></div>
+      const m = modById(Q.modId), owner = player(Q.modOwner);
+      return `<div class="center">${owner ? `<div class="status">${whoHTML(owner)} забирает модификатор…</div>` : ''}
+        <div class="mod-card reveal"><div class="e">${esc(m.emoji)}</div><div class="n">${esc(m.name)}</div><div class="d" style="color:var(--text)">${esc(Q.modText)}</div></div>
         <div class="controls"><button class="btn" data-act="to-question">К вопросу →</button></div></div>`;
     }
     case 'cat-pick': {
@@ -1370,7 +1370,7 @@ function edMain() {
   }
   if (E.tab === 'mods') {
     return `<div class="ed-head"><div class="logo sm">МОДИФИКАТОРЫ</div></div>
-      <p class="hint" style="max-width:780px;margin-bottom:16px">Модификатор прячется за клеткой. Когда её открывают, все жмут кнопки — кто первый, тот и забирает. Количество случайных модификаторов задаётся в каждом раунде. «Тайный» показывается как ❓, пока его не схватят. Тип «Правило» ничего не считает сам — просто объявляет условие, а следит за ним ведущий.</p>
+      <p class="hint" style="max-width:780px;margin-bottom:16px">Модификатор прячется за клеткой. Когда её открывают, все жмут кнопки — кто первый, тот и забирает. Количество случайных модификаторов задаётся в каждом раунде. Игроки не видят, какой модификатор спрятан, — он раскрывается только тому, кто нажал первым (ведущий видит его на пульте). Тип «Правило» ничего не считает сам — просто объявляет условие, а следит за ним ведущий.</p>
       <div class="ed-list">${pk.modifiers.map((m, i) => { const b = `modifiers.${i}`, def = MOD_TYPES[m.type] || {}; return `<div class="ed-item">
         <div class="mod-grid"><input class="inp emoji" data-path="${b}.emoji" value="${esc(m.emoji)}" maxlength="4">
           <input class="inp" data-path="${b}.name" value="${esc(m.name)}" placeholder="Название" style="font-weight:800">
@@ -1378,8 +1378,7 @@ function edMain() {
           ${def.amount ? `<input class="inp" type="number" step="100" data-path="${b}.amount" data-type="num" value="${Number(m.amount) || 0}" title="Очки">` : '<span></span>'}
           <button class="icon" data-act="ed-moddel" data-i="${i}" title="Удалить">🗑</button></div>
         <input class="inp" data-path="${b}.desc" value="${esc(m.desc)}" placeholder="Что видят игроки">
-        <div class="row"><label class="check" style="margin:0 18px 0 0"><input type="checkbox" data-path="${b}.enabled" ${m.enabled !== false ? 'checked' : ''}> Выпадает случайно</label>
-          <label class="check" style="margin:0"><input type="checkbox" data-path="${b}.hidden" ${m.hidden ? 'checked' : ''}> Тайный ❓</label></div></div>`; }).join('')}</div>
+        <div class="row"><label class="check" style="margin:0"><input type="checkbox" data-path="${b}.enabled" ${m.enabled !== false ? 'checked' : ''}> Выпадает случайно</label></div></div>`; }).join('')}</div>
       <button class="btn outline" data-act="ed-modadd" style="margin-top:12px">+ Модификатор</button>`;
   }
   const ri = +E.tab.slice(1), r = pk.rounds[ri];
