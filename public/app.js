@@ -46,7 +46,9 @@ const MOD_TYPES = {
   chooser: { label: 'Выбирает следующий вопрос' },
   custom: { label: 'Правило (следит ведущий)' },
 };
-const QTYPES = { normal: 'Обычный вопрос', cat: '🐱 Кот в мешке', auction: '🔨 Аукцион', closest: '🎯 Ближе всех (отвечают все)' };
+const QTYPES = { normal: 'Обычный вопрос', cat: '🐱 Кот в мешке', auction: '🔨 Аукцион', closest: '🎯 Ближе всех (отвечают все)', vote: '🗳 Голосование (голосуют все, ведущий отмечает)' };
+const QICONS = { cat: '🐱', auction: '🔨', closest: '🎯', vote: '🗳' };
+const voteOptions = q => { const o = String(q.voteOptions || '').split(/\n|,/).map(s => s.trim()).filter(Boolean); return o.length ? o : ['Да', 'Нет']; };
 
 /* =================== состояние =================== */
 const makePlayer = i => ({ id: uid(), name: 'Игрок ' + (i + 1), color: PCOLORS[i % 8], score: 0, binding: null, badges: {} });
@@ -222,6 +224,10 @@ function onNet(m) {
   else if (m.type === 'panels') { NET.panels = m.n; refreshPhones(); if (m.n) pushState(true); }
   else if (m.type === 'cmd') { closeModal(); act(m.act, Object.assign({}, m.d, { remote: 1 })); }
   else if (m.type === 'buzz') onDevice('phone:' + m.id);
+  else if (m.type === 'vote') {
+    const p = S.players.find(o => o.binding === 'phone:' + m.id);
+    if (p && Q && Q.type === 'vote' && Q.view === 'question') { Q.votes[p.id] = String(m.choice || '').slice(0, 60); sfx('bind'); render(); }
+  }
   else if ((m.type === 'bet' || m.type === 'answer') && F) {
     const p = S.players.find(o => o.binding === 'phone:' + m.id);
     if (!p || !F.parts.includes(p.id)) return;
@@ -254,7 +260,7 @@ function netState() {
   if (S.screen === 'game' && G) {
     if (Q) {
       if (Q.view === 'grab') phase = Q.phase === 'grab' ? 'grab' : 'wait';
-      else if (Q.view === 'question') phase = Q.type === 'closest' ? 'closest' : Q.phase;
+      else if (Q.view === 'question') phase = Q.type === 'closest' ? 'closest' : Q.type === 'vote' ? 'voting' : Q.phase;
     } else if (G.phase === 'final' && F) {
       if (F.phase === 'bet') phase = 'final-bet';
       else if (F.phase === 'question') phase = 'final-answer';
@@ -270,6 +276,10 @@ function netState() {
         id: Q.id, view: Q.view, theme: Q.theme, value: fmt(Q.value), type: Q.type,
         text: shown ? Q.text : '',
         answer: Q.view === 'answer' ? (Q.q.answer || '—') : null,
+        options: Q.type === 'vote' ? voteOptions(Q.q) : null,
+        voted: Q.type === 'vote' ? Object.keys(Q.votes) : null,
+        votes: Q.type === 'vote' && Q.view === 'answer' ? Q.votes : null,   // чужие голоса видны только после ответа
+        marks: Q.type === 'vote' && Q.view === 'answer' ? Q.marks : null,
         media: shown && Q.q.media && Q.q.media.src ? Q.id : null,
         ansMedia: Q.view === 'answer' && Q.q.answerMedia && Q.q.answerMedia.src ? Q.id + 'a' : null,
         mod: m ? (Q.view === 'grab' ? '❓ Модификатор! Что внутри — узнаешь, если схватишь' : `${m.emoji} ${m.name}`) : null,
@@ -319,14 +329,27 @@ function hostState() {
         if (Q.auc.pid) { A('Ва-банк', 'auc-allin'); A('Продано!', 'auc-sell', null, 'primary'); }
         break;
       case 'question':
+        if (Q.type === 'vote') {
+          st.status = `Голосование: проголосовали ${Object.keys(Q.votes).length} из ${S.players.length}`;
+          st.info = S.players.map(p => `${p.name}: ${Q.votes[p.id] != null ? Q.votes[p.id] : '—'}`);
+          A('Показать ответ', 'reveal', null, 'primary'); break;
+        }
         if (Q.type === 'closest') { st.status = 'Все отвечают вслух по очереди, потом открой ответ'; A('Показать ответ', 'reveal', null, 'primary'); break; }
         if (Q.phase === 'reading') { st.status = Q.only ? 'Отвечает ' + player(Q.only).name : 'Прочитай вопрос вслух'; A(Q.only ? 'Старт' : 'Разрешить ответы', 'arm', null, 'primary'); A('Показать ответ', 'reveal'); }
         else if (Q.phase === 'armed') { st.status = 'Ждём кнопку…'; pl('pcard', p => !Q.tried.includes(p.id), 'Отвечает: '); A('Никто → ответ', 'reveal'); }
         else if (Q.phase === 'answering') { st.status = 'Отвечает ' + player(Q.answering).name; A('✓ Верно', 'right', null, 'good'); A('✗ Неверно', 'wrong', null, 'bad'); }
         break;
       case 'answer':
-        st.status = Q.type === 'closest' ? 'Кто ближе всех? Отметь победителя' : 'Ответ на экране';
+        st.status = Q.type === 'closest' ? 'Кто ближе всех? Отметь победителя' : Q.type === 'vote' ? (Q.voteDone ? 'Баллы начислены' : 'Отметь, кто проголосовал верно') : 'Ответ на экране';
         if (Q.type === 'closest') pl('closest-win', p => !(Q.won || []).includes(p.id), '🎯 ');
+        if (Q.type === 'vote' && !Q.voteDone) {
+          S.players.forEach(p => {
+            const v = Q.votes[p.id], m = Q.marks[p.id] || 0;
+            A(`✓ ${p.name}${v != null ? ` (${v})` : ''}`, 'vote-mark', { id: p.id, v: '1' }, 'vgood' + (m > 0 ? ' on' : ''));
+            A(`✗ ${p.name}`, 'vote-mark', { id: p.id, v: '-1' }, 'vbad' + (m < 0 ? ' on' : ''));
+          });
+          A('Начислить баллы', 'vote-apply', null, 'primary');
+        }
         A('К табло →', 'close-q', null, 'primary');
         break;
     }
@@ -334,7 +357,7 @@ function hostState() {
   else if (G.phase === 'board') {
     const ch = player(G.chooser);
     st.status = (ch ? ch.name : 'Игрок') + ' выбирает вопрос';
-    st.board = round().themes.map((t, ti) => ({ name: t.name, cells: t.questions.map((q, qi) => { const k = ti + '-' + qi; return { k, v: fmt(qValue(q, qi)), used: !!G.used[k], mark: ({ cat: '🐱', auction: '🔨', closest: '🎯' }[q.type] || '') + (G.modCells[k] ? '✨' : '') }; }) }));
+    st.board = round().themes.map((t, ti) => ({ name: t.name, cells: t.questions.map((q, qi) => { const k = ti + '-' + qi; return { k, v: fmt(qValue(q, qi)), used: !!G.used[k], mark: (QICONS[q.type] || '') + (G.modCells[k] ? '✨' : '') }; }) }));
   } else if (G.phase === 'roundEnd') { st.status = 'Раунд окончен'; A(G.round >= S.pack.rounds.length - 1 ? 'В финал →' : 'Следующий раунд →', 'next-round', null, 'primary'); }
   else if (G.phase === 'final' && F) {
     if (F.phase === 'remove') { st.status = player(F.parts[F.turn % F.parts.length]).name + ' убирает тему'; fin.forEach((t, i) => { if (!F.removed.includes(i)) A('✕ ' + t.name, 'f-remove', { i: String(i) }); }); }
@@ -507,7 +530,7 @@ function renderGame() {
 }
 function rerenderStage() { const st = $('#stage'); if (st) st.dataset.key = ''; render(); }
 function stageKey() {
-  if (Q) return `q:${Q.id}:${Q.view}:${(Q.won || []).length}`;
+  if (Q) return `q:${Q.id}:${Q.view}:${(Q.won || []).length}` + (Q.type === 'vote' && Q.view === 'answer' ? JSON.stringify(Q.marks) + (Q.voteDone ? 1 : 0) : '');
   if (G.phase === 'final' && F) return `f:${F.phase}:${F.removed.length}:${F.showAnswer ? 1 : 0}:${Object.keys(F.judged).length}`;
   return `${G.phase}:${G.round}:${Object.keys(G.used).length}`;
 }
@@ -564,7 +587,8 @@ function renderPlayers() {
     const choosing = !Q && G.phase === 'board' && G.chooser === p.id;
     if (choosing) cls += ' chooser';
     if ((falseUntil[p.id] || 0) > Date.now()) cls += ' falsestart';
-    const badges = Object.keys(BADGES).filter(b => p.badges[b]).map(b => `<span class="badge" title="${BADGES[b][1]}">${BADGES[b][0]}</span>`).join('');
+    const badges = Object.keys(BADGES).filter(b => p.badges[b]).map(b => `<span class="badge" title="${BADGES[b][1]}">${BADGES[b][0]}</span>`).join('')
+      + (Q && Q.type === 'vote' && Q.view === 'question' && Q.votes[p.id] != null ? '<span class="badge" title="Проголосовал">🗳</span>' : '');
     return `<button class="pcard ${cls}" style="--c:${p.color}" data-act="pcard" data-id="${p.id}">
       <div class="pname">${esc(p.name)} ${badges}</div><div class="pscore ${p.score < 0 ? 'neg' : ''}">${fmt(p.score)}</div>${choosing ? '<div class="ptag">выбирает</div>' : ''}</button>`;
   }).join('');
@@ -598,7 +622,31 @@ function openCell(k) {
 function startMain() {
   if (Q.type === 'cat') { Q.view = 'cat-pick'; sfx('cat'); }
   else if (Q.type === 'auction') { Q.view = 'auction'; Q.auc = { pid: null, bid: Q.value }; sfx('cat'); }
+  else if (Q.type === 'vote') { Q.view = 'question'; Q.phase = 'voting'; Q.votes = {}; Q.marks = {}; Q.voteDone = false; }
   else beginQuestion();
+}
+/* голосование: ✓ — плюс стоимость, ✗ — ноль (или минус, если в клетке включён штраф) */
+function applyVotes() {
+  if (!Q || Q.type !== 'vote' || Q.voteDone) return;
+  let any = false;
+  S.players.forEach(p => {
+    const m = Q.marks[p.id];
+    if (m > 0) { const d = Q.value * (p.badges.double ? 2 : 1); p.score += d; Q.log.push({ pid: p.id, d, note: '🗳' }); any = true; }
+    else if (m < 0 && Q.q.votePenalty) {
+      let d = -Q.value, note = '🗳';
+      if (p.badges.immune) { d = 0; note = 'бессмертие'; } else if (p.badges.shield) { d = 0; note = 'щит'; delete p.badges.shield; }
+      p.score += d; Q.log.push({ pid: p.id, d, note });
+    }
+  });
+  Q.voteDone = true; sfx(any ? 'good' : 'bad'); save(); render();
+}
+function voteBoardHTML() {
+  return `<div class="vote-board">${S.players.map(p => {
+    const v = Q.votes[p.id], m = Q.marks[p.id] || 0;
+    return `<div class="vote-row" style="--c:${p.color}"><span class="nm">${esc(p.name)}</span><span class="vv">${v != null ? esc(v) : '<span class="muted">—</span>'}</span>
+      <span class="mk ${m > 0 ? 'plus' : m < 0 ? 'minus' : ''}">${m > 0 ? '✓' : m < 0 ? '✗' : ''}</span>
+      ${Q.voteDone ? '' : `<span class="ctl"><button class="btn sm ${m > 0 ? 'good' : 'ghost'}" data-act="vote-mark" data-id="${p.id}" data-v="1">✓</button><button class="btn sm ${m < 0 ? 'bad' : 'ghost'}" data-act="vote-mark" data-id="${p.id}" data-v="-1">✗</button></span>`}</div>`;
+  }).join('')}</div>`;
 }
 /* показать вопрос; с настройкой «Отвечать сразу» кнопки открываются без разрешения ведущего */
 function beginQuestion() {
@@ -610,11 +658,15 @@ function beginQuestion() {
 function startTimer(sec, kind) { sec = Number(sec) || 0; Q.timer = sec > 0 ? { end: Date.now() + sec * 1000, total: sec * 1000, kind } : null; }
 function reveal() {
   Q.timer = null; Q.answering = null; Q.view = 'answer';
+  if (Q.type === 'vote') {   // если задан правильный вариант — отметки по голосам с телефонов ставим сами
+    const c = String(Q.q.voteCorrect || '').trim().toLowerCase();
+    if (c) S.players.forEach(p => { const v = Q.votes[p.id]; if (v != null && !Q.marks[p.id]) Q.marks[p.id] = v.trim().toLowerCase() === c ? 1 : -1; });
+  }
   if (Q.q.answerMedia && Q.q.answerMedia.src) postMedia(Q.id + 'a', Q.q.answerMedia);
   render();
 }
 function metaHTML() {
-  const tag = { cat: '🐱 кот в мешке', auction: '🔨 аукцион', closest: '🎯 ближе всех' }[Q.type];
+  const tag = { cat: '🐱 кот в мешке', auction: '🔨 аукцион', closest: '🎯 ближе всех', vote: '🗳 голосование' }[Q.type];
   return `<div class="qmeta"><span>${esc(Q.theme)}</span><span class="v">${fmt(Q.value)}</span>${tag ? `<span class="tag">${tag}</span>` : ''}</div>`;
 }
 function mediaTag(m, play) {
@@ -670,6 +722,7 @@ function questionHTML() {
       return `<div class="center qscreen">${metaHTML()}
         ${Q.text ? `<div class="qtext ${isEmojiOnly(Q.text) ? 'emoji' : ''}">${esc(Q.text)}</div>` : ''}
         ${q.media && q.media.src ? `<div class="qmedia">${mediaTag(q.media, true)}</div>` : ''}
+        ${Q.type === 'vote' ? `<div class="vote-opts">${voteOptions(q).map(o => `<span>${esc(o)}</span>`).join('')}</div>` : ''}
         <div class="timer" id="timer"><i></i></div>
         <div class="status" id="status"></div><div class="controls" id="controls"></div></div>`;
     case 'answer': {
@@ -679,6 +732,7 @@ function questionHTML() {
         ${q.answerMedia && q.answerMedia.src ? `<div class="qmedia">${mediaTag(q.answerMedia, true)}</div>` : ''}
         ${log ? `<div class="qlog">${log}</div>` : ''}
         ${Q.type === 'closest' ? `<div class="ctl"><div class="status muted" style="font-size:18px;margin-bottom:10px">Кто был ближе всех?</div>${pickHTML(S.players.filter(p => !Q.won.includes(p.id)), 'closest-win')}</div>` : ''}
+        ${Q.type === 'vote' ? voteBoardHTML() + (Q.voteDone ? '' : '<div class="ctl"><button class="btn good" data-act="vote-apply">Начислить баллы</button></div>') : ''}
         <div class="controls"><button class="btn" data-act="close-q" title="Пробел">К табло →</button></div></div>`;
     }
   }
@@ -691,7 +745,10 @@ function updateDynamic() {
     setDyn('controls', '<button class="btn ghost" data-act="mod-skip">Никто — к вопросу</button>');
   } else if (Q && Q.view === 'question') {
     let s = '', c = '';
-    if (Q.type === 'closest') {
+    if (Q.type === 'vote') {
+      s = `Голосуем! <span class="muted">Проголосовали: ${Object.keys(Q.votes).length} из ${S.players.length}</span>`;
+      c = '<button class="btn" data-act="reveal">Показать ответ</button>';
+    } else if (Q.type === 'closest') {
       s = '<span class="muted">Отвечают все по очереди — баллы самому точному</span>';
       c = '<button class="btn" data-act="reveal">Показать ответ</button>';
     } else if (Q.phase === 'reading') {
@@ -745,7 +802,7 @@ function buzz(pid) {
     else if (S.settings.falseStart) falseStart(pid);
     return;
   }
-  if (Q.view !== 'question' || Q.only || Q.type === 'closest') return;
+  if (Q.view !== 'question' || Q.only || Q.type === 'closest' || Q.type === 'vote') return;
   if (Q.phase === 'reading') { if (S.settings.falseStart && !Q.tried.includes(pid)) falseStart(pid); return; }
   if (Q.phase === 'armed') {
     if (Q.tried.includes(pid) || (falseUntil[pid] || 0) > Date.now()) return;
@@ -784,6 +841,7 @@ function closestWin(pid) {
 }
 function closeQuestion() {
   if (!Q) return;
+  if (Q.type === 'vote' && !Q.voteDone && Object.values(Q.marks).some(Boolean)) applyVotes();   // забыли нажать «Начислить» — начисляем сами
   G.used[Q.k] = true;
   if (Q.forceChooser) G.chooser = Q.forceChooser;
   Q = null;
@@ -988,6 +1046,8 @@ function act(a, d = {}) {
       break;
     case 'grab-give': if (p) grabMod(d.id, true); break;
     case 'closest-win': closestWin(d.id); break;
+    case 'vote-mark': if (inQ('answer') && Q.type === 'vote' && !Q.voteDone && p) { const v = +d.v; Q.marks[d.id] = Q.marks[d.id] === v ? 0 : v; render(); } break;
+    case 'vote-apply': if (inQ('answer')) applyVotes(); break;
     case 'arm':
       if (!inQ('question') || Q.phase !== 'reading') break;
       if (Q.only) { Q.answering = Q.only; Q.phase = 'answering'; Q.overtime = false; startTimer(S.settings.answerTime, 'answer'); }
@@ -1403,7 +1463,7 @@ function edMain() {
 }
 function cellInner(ri, ti, qi) {
   const q = S.pack.rounds[ri].themes[ti].questions[qi];
-  const ic = [{ cat: '🐱', auction: '🔨', closest: '🎯' }[q.type] || '', q.modifier ? '✨' : '',
+  const ic = [QICONS[q.type] || '', q.modifier ? '✨' : '',
     q.media && q.media.src ? { image: '🖼', audio: '🔊', video: '🎬' }[q.media.kind] : '', !String(q.answer || '').trim() ? '⚠️' : ''].join(' ');
   return `<b>${fmt(qValue(q, qi, ri))}</b><span class="ico">${ic}</span><span class="prev">${esc(q.text) || '<i>пусто</i>'}</span>`;
 }
@@ -1430,6 +1490,12 @@ function edCell() {
     ${q.type === 'cat' ? `<label class="lbl">Тема кота <span class="muted">(пусто = как у клетки)</span></label><input class="inp" data-path="${b}.cat.theme" value="${esc(q.cat.theme)}" placeholder="Например: Котики">
       <label class="lbl">Стоимость кота <span class="muted">(0 = как у клетки)</span></label><input class="inp" type="number" step="100" data-path="${b}.cat.value" data-type="num" value="${Number(q.cat.value) || ''}">` : ''}
     ${q.type === 'closest' ? '<p class="hint">Все отвечают по очереди, ведущий открывает ответ и отмечает самого точного — он получает баллы. Никто не теряет.</p>' : ''}
+    ${q.type === 'vote' ? `<p class="hint">Голосуют все: с телефона — кнопками вариантов, без телефона — вслух. Ведущий открывает ответ, отмечает каждого ✓/✗ и начисляет баллы.</p>
+      <label class="lbl">Варианты <span class="muted">(каждый с новой строки; пусто = Да / Нет)</span></label>
+      <textarea class="inp" rows="3" data-path="${b}.voteOptions" placeholder="Да&#10;Нет">${esc(q.voteOptions || '')}</textarea>
+      <label class="lbl">Правильный вариант <span class="muted">(необязательно — тогда ✓/✗ по голосам с телефонов проставятся сами)</span></label>
+      <input class="inp" data-path="${b}.voteCorrect" value="${esc(q.voteCorrect || '')}" placeholder="Например: Да">
+      <label class="check"><input type="checkbox" data-path="${b}.votePenalty" ${q.votePenalty ? 'checked' : ''}> Штраф за неверный голос (минус стоимость)</label>` : ''}
     <label class="lbl">Вопрос</label><textarea class="inp" rows="4" data-path="${b}.text" placeholder="Текст вопроса (можно только эмодзи — они будут крупными)">${esc(q.text)}</textarea>
     ${mediaEditor(b + '.media', q.media)}
     <label class="lbl">Ответ</label><textarea class="inp" rows="2" data-path="${b}.answer" placeholder="Правильный ответ">${esc(q.answer)}</textarea>

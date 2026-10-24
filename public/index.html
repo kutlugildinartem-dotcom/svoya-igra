@@ -164,6 +164,15 @@ body.remote .controls,body.remote .ctl{display:none!important}
 .mod-card{background:var(--surface);border-radius:28px;padding:30px 50px;max-width:720px;box-shadow:0 0 0 2px var(--gold),0 0 80px -20px var(--gold);animation:pop .5s}
 .mod-card .e{font-size:clamp(60px,8vw,110px);line-height:1}
 .mod-card .n{font-family:var(--display);font-size:clamp(26px,3.2vw,46px);font-weight:800;margin-top:8px}
+.vote-opts{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.vote-opts span{background:var(--surface);border-radius:14px;padding:12px 26px;font-weight:800;font-size:clamp(18px,2vw,30px);box-shadow:inset 0 0 0 2px var(--line)}
+.vote-board{display:flex;flex-direction:column;gap:6px;width:min(720px,100%)}
+.vote-row{display:flex;align-items:center;gap:12px;background:var(--surface);border-radius:12px;padding:8px 14px;box-shadow:inset 4px 0 0 var(--c);font-size:clamp(15px,1.5vw,20px)}
+.vote-row .nm{font-weight:800;flex:1;text-align:left}
+.vote-row .vv{font-weight:700;color:var(--muted);min-width:80px;text-align:left}
+.vote-row .mk{font-family:var(--display);font-weight:800;width:28px;text-align:center}
+.vote-row .mk.plus{color:var(--good)}.vote-row .mk.minus{color:var(--bad)}
+.vote-row .ctl{display:flex;gap:6px}
 .mod-card.mystery .e{animation:wobble 1.2s ease-in-out infinite}
 .mod-card.reveal{animation:flip .6s ease-out}
 @keyframes wobble{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(-8deg) scale(1.06)}75%{transform:rotate(8deg) scale(1.06)}}
