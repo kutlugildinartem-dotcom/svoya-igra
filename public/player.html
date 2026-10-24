@@ -25,6 +25,9 @@ h1 span{color:var(--accent)}
 .top{display:flex;justify-content:space-between;align-items:center;background:var(--surface);border-radius:16px;padding:10px 14px;box-shadow:inset 0 4px 0 var(--c)}
 .top .nm{font-weight:800;font-size:17px}
 .top .sc{font-family:'Unbounded',sans-serif;font-size:20px}
+.ping{font-size:11px;font-weight:800;color:var(--muted);margin-left:auto;margin-right:12px}
+.ping.good{color:var(--good)}.ping.mid{color:var(--gold)}.ping.bad{color:var(--bad)}
+.buzz.sent{filter:saturate(.6) brightness(.9);font-size:clamp(26px,8vw,44px)}
 .mini{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
 .mini span{flex:none;background:var(--surface);border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;box-shadow:inset 3px 0 0 var(--pc)}
 .view{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:10px}
@@ -75,7 +78,7 @@ h1 span{color:var(--accent)}
 </div>
 
 <div class="screen hidden" id="main">
-  <div class="top"><div class="nm" id="me-name"></div><div class="sc" id="me-score"></div></div>
+  <div class="top"><div class="nm" id="me-name"></div><span class="ping" id="ping">📶 —</span><div class="sc" id="me-score"></div></div>
   <div class="mini" id="mini"></div>
   <div class="view" id="view"></div>
   <div class="status" id="status">Подключение…</div>
@@ -126,11 +129,41 @@ $('#go').onclick = async () => {
   start();
 };
 $('#name').onkeydown = e => { if (e.key === 'Enter') $('#go').click(); };
-$('#leave').onclick = () => { if (es) es.close(); es = null; $('#main').classList.add('hidden'); $('#login').classList.remove('hidden'); };
+$('#leave').onclick = () => { if (es) es.close(); es = null; try { if (ws) { ws.onclose = null; ws.close(); } } catch { } wsOk = false; $('#main').classList.add('hidden'); $('#login').classList.remove('hidden'); };
 
+/* ---------- быстрый канал: WebSocket + сверка часов с сервером ---------- */
+let ws = null, wsOk = false, clockOff = 0, bestRtt = Infinity;
+function wsConnect() {
+  try { if (ws) { ws.onclose = null; ws.close(); } } catch { }
+  wsOk = false;
+  if (!('WebSocket' in window) || !room) return;
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?room=${encodeURIComponent(room)}&id=${encodeURIComponent(myId)}`);
+  ws.onopen = () => { wsOk = true; bestRtt = Infinity; syncClock(6); };
+  ws.onclose = () => { wsOk = false; drawPing(); setTimeout(() => { if (es) wsConnect(); }, 1500); };
+  ws.onerror = () => { };
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.pong != null) {
+      const now = Date.now(), rtt = now - m.pong;
+      if (rtt <= bestRtt) { bestRtt = rtt; clockOff = m.s + rtt / 2 - now; }
+      lastRtt = rtt; drawPing();
+    }
+  };
+}
+let lastRtt = null;
+function syncClock(n) { for (let i = 0; i < n; i++) setTimeout(() => { if (wsOk) ws.send(JSON.stringify({ ping: Date.now() })); }, i * 200); }
+setInterval(() => { if (wsOk) { bestRtt = bestRtt * 1.5 + 5; syncClock(3); } }, 20000);   // часы уплывают — периодически сверяем заново
+function drawPing() {
+  const el = $('#ping'); if (!el) return;
+  if (!wsOk) { el.textContent = '📶 —'; el.className = 'ping'; return; }
+  const ms = Math.round(lastRtt || 0);
+  el.textContent = `📶 ${ms} мс`; el.className = 'ping ' + (ms < 120 ? 'good' : ms < 300 ? 'mid' : 'bad');
+}
 function send(obj) {
   obj.id = myId; obj.room = room;
-  return fetch('/api/player', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj), keepalive: true }).catch(() => { });
+  const txt = JSON.stringify(obj);
+  if (wsOk && ws.readyState === 1) { ws.send(txt); return; }
+  fetch('/api/player', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: txt, keepalive: true }).catch(() => { });
 }
 function start() {
   $('#err').textContent = '';
@@ -144,20 +177,26 @@ function start() {
     if (m.type === 'noroom') { es.close(); es = null; $('#main').classList.add('hidden'); $('#login').classList.remove('hidden'); $('#err').textContent = 'Комната не найдена или игра закрыта.'; }
     if (m.type === 'state') { state = m.state; draw(); }
   };
+  wsConnect();
   keepAwake();
   draw();
 }
 
 /* ---------- нажатие: экран, тряска, кнопка наушников ---------- */
 const btn = $('#buzz');
+let sentKey = null;   // «я уже нажал в этом вопросе» — чтобы кнопка отреагировала мгновенно, не дожидаясь сервера
+const pressKey = () => state ? `${state.q ? state.q.id : ''}:${state.phase}:${(state.tried || []).length}` : '';
 function press(src) {
   const ph = state ? state.phase : '';
   if (src !== 'tap' && !(ph === 'armed' || ph === 'grab' || (state && state.capture))) return;  // тряска не даёт фальстартов
-  btn.classList.add('down'); setTimeout(() => btn.classList.remove('down'), 150);
+  // сначала отправляем (с точным временем по часам сервера), потом всё остальное
+  send({ type: 'buzz', via: src, at: bestRtt < Infinity ? Math.round(Date.now() + clockOff) : undefined });
+  const inGame = state && state.players.some(p => p.binding === 'phone:' + myId);
+  if (inGame && (ph === 'armed' || ph === 'grab')) { sentKey = pressKey(); btn.textContent = '✓ НАЖАЛ'; btn.classList.add('sent'); }
+  btn.classList.add('down'); setTimeout(() => btn.classList.remove('down'), 120);
   if (navigator.vibrate) navigator.vibrate(30);
-  send({ type: 'buzz', via: src });
 }
-btn.addEventListener('pointerdown', e => { e.preventDefault(); press('tap'); });
+btn.addEventListener('pointerdown', e => { e.preventDefault(); press('tap'); }, { passive: false });
 btn.addEventListener('contextmenu', e => e.preventDefault());
 
 let shakeOn = false, prevA = null, lastShake = 0;
@@ -273,6 +312,7 @@ function draw() {
   else if (ph === 'final-bet' || ph === 'final-answer') { status = state.final && state.final.parts.includes(me.id) ? 'Финал!' : 'Ты не прошёл в финал — болей за остальных'; label = 'ФИНАЛ'; }
   else if (state.board && state.chooser === me.id) status = 'Твой выбор — нажми клетку на табло';
   else if (state.board && state.chooser) status = name(state.chooser) + ' выбирает вопрос';
+  if ((ph === 'armed' || ph === 'grab') && sentKey === pressKey() && cls) { cls += ' sent'; label = '✓ НАЖАЛ'; status = 'Нажатие отправлено — ждём, кто был первым'; }
   btn.className = 'buzz ' + cls;
   btn.textContent = label;
   $('#status').textContent = status;

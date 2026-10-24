@@ -1,6 +1,7 @@
 // Своя игра — сервер с комнатами. Без зависимостей: node server.js
 // Экран игры (/screen) ведёт игру и создаёт комнату, игроки (/p) и ведущий (/host) подключаются по коду.
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -65,7 +66,7 @@ async function loadRegistry() {
   }
   if (!loaded && GH.repo) {   // без ключа читаем публичную копию — реестр не будет пустым после перезапуска
     try {
-      const r = await fetch(`https://raw.githubusercontent.com/${GH.repo}/${GH.branch}/${GH.file}?t=${Date.now()}`);
+      const r = await fetch(`https://raw.githubusercontent.com/${GH.repo}/${GH.branch}/${GH.file}?t=${Date.now()}`, { signal: AbortSignal.timeout(6000) });
       if (r.ok) { loaded = await r.json(); console.log('  Реестр загружен из GitHub (только чтение, ждём ключ для записи)'); }
     } catch (e) { console.warn('  Реестр: не удалось прочитать GitHub —', e.message); }
   }
@@ -274,6 +275,7 @@ const server = http.createServer((req, res) => {
     return m ? json(res, 200, m) : json(res, 404, {});
   }
   if (p === '/api/room') return json(res, 200, { exists: rooms.has(roomCode(q.get('code'))) });
+  if (p === '/api/time') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); return res.end('{"s":' + Date.now() + '}'); }
   if (p === '/api/info') return json(res, 200, { port: PORT, urls: lanUrls(), rooms: rooms.size });
 
   // статика
@@ -286,6 +288,58 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(full).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(buf);
   });
+});
+
+/* ---------- WebSocket для телефонов: нажатие идёт по открытому каналу, без нового HTTP-запроса ---------- */
+function wsFrame(data, op = 1) {
+  const p = Buffer.from(data);
+  let h;
+  if (p.length < 126) h = Buffer.from([0x80 | op, p.length]);
+  else if (p.length < 65536) { h = Buffer.alloc(4); h[0] = 0x80 | op; h[1] = 126; h.writeUInt16BE(p.length, 2); }
+  else { h = Buffer.alloc(10); h[0] = 0x80 | op; h[1] = 127; h.writeBigUInt64BE(BigInt(p.length), 2); }
+  return Buffer.concat([h, p]);
+}
+function wsParse(b) {
+  if (b.length < 2) return null;
+  const op = b[0] & 15, masked = b[1] & 128;
+  let len = b[1] & 127, off = 2;
+  if (len === 126) { if (b.length < 4) return null; len = b.readUInt16BE(2); off = 4; }
+  else if (len === 127) { if (b.length < 10) return null; len = Number(b.readBigUInt64BE(2)); off = 10; }
+  const maskAt = off; if (masked) off += 4;
+  if (b.length < off + len) return null;
+  const payload = Buffer.alloc(len);
+  for (let i = 0; i < len; i++) payload[i] = masked ? b[off + i] ^ b[maskAt + (i & 3)] : b[off + i];
+  return { op, payload, size: off + len };
+}
+server.on('upgrade', (req, socket) => {
+  const url = new URL(req.url, 'http://local'), key = req.headers['sec-websocket-key'];
+  if (url.pathname !== '/ws' || !key) return socket.destroy();
+  const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  socket.setNoDelay(true);
+  const code = roomCode(url.searchParams.get('room')), id = (url.searchParams.get('id') || '').slice(0, 40);
+  let buf = Buffer.alloc(0);
+  const onMessage = txt => {
+    let m; try { m = JSON.parse(txt); } catch { return; }
+    if (m.ping != null) return socket.write(wsFrame('{"pong":' + Number(m.ping) + ',"s":' + Date.now() + '}'));   // сверка часов
+    const r = rooms.get(code);
+    if (!r || !id) return;
+    r.touched = Date.now(); m.id = id; m.t = Date.now(); delete m.room;
+    toHosts(r, m);
+  };
+  socket.on('data', chunk => {
+    buf = Buffer.concat([buf, chunk]);
+    let f;
+    while ((f = wsParse(buf))) {
+      buf = buf.subarray(f.size);
+      if (f.op === 8) { socket.end(wsFrame('', 8)); return; }
+      if (f.op === 9) socket.write(wsFrame(f.payload, 10));
+      else if (f.op === 1) onMessage(f.payload.toString('utf8'));
+    }
+  });
+  socket.on('error', () => { });
+  const ka = setInterval(() => { if (!socket.destroyed) socket.write(wsFrame('', 9)); }, 20000);
+  socket.on('close', () => clearInterval(ka));
 });
 
 loadRegistry().finally(() => server.listen(PORT, '0.0.0.0', () => {

@@ -121,7 +121,7 @@ function deviceLabel(b) {
   if (b.startsWith('phone:')) { const ph = phones.get(b.slice(6)); return '📱 ' + (ph ? ph.name : 'телефон (не в сети)'); }
   return b;
 }
-function onDevice(dev) {
+function onDevice(dev, at) {
   if (capture) {
     const p = player(capture.pid);
     if (!p) { capture = null; return true; }
@@ -132,7 +132,7 @@ function onDevice(dev) {
     return true;
   }
   const p = S.players.find(o => o.binding === dev);
-  if (p) { buzz(p.id); return true; }
+  if (p) { buzz(p.id, at); return true; }
   return false;
 }
 document.addEventListener('keydown', e => {
@@ -198,8 +198,23 @@ function connectNet() {
     if (m.type === 'roomtaken') { es.close(); roomInit(true); connectNet(); return; }
     onNet(m);
   };
-  es.onopen = () => { pushState(true); if (Q && Q.q.media && Q.q.media.src) postMedia(Q.id, Q.q.media); };
+  es.onopen = () => { pushState(true); syncClock(); if (Q && Q.q.media && Q.q.media.src) postMedia(Q.id, Q.q.media); };
 }
+/* сверка часов экрана с сервером (как NTP: берём замер с самым быстрым ответом) */
+async function syncClock() {
+  if (!NET.online || syncClock.busy) return;
+  syncClock.busy = true;
+  let best = Infinity;
+  for (let i = 0; i < 5; i++) {
+    const t0 = Date.now();
+    try {
+      const j = await (await fetch('/api/time', { cache: 'no-store' })).json(), t1 = Date.now(), rtt = t1 - t0;
+      if (rtt < best) { best = rtt; NET.off = j.s + rtt / 2 - t1; }
+    } catch { break; }
+  }
+  syncClock.busy = false;
+}
+setInterval(syncClock, 60000);
 function postMedia(id, media) {
   if (!NET.online || !media || !media.src) return;
   fetch('/api/media', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ room: NET.room, key: NET.key, id, media }) }).catch(() => { });
@@ -223,7 +238,11 @@ function onNet(m) {
   else if (m.type === 'leave') { phones.delete(m.id); refreshPhones(); }
   else if (m.type === 'panels') { NET.panels = m.n; refreshPhones(); if (m.n) pushState(true); }
   else if (m.type === 'cmd') { closeModal(); act(m.act, Object.assign({}, m.d, { remote: 1 })); }
-  else if (m.type === 'buzz') onDevice('phone:' + m.id);
+  else if (m.type === 'buzz') {
+    // время нажатия по часам сервера; если телефон ещё не сверил часы или они врут — берём время прихода на сервер
+    const at = Number(m.at) && Math.abs(m.at - m.t) < 3000 ? Number(m.at) : m.t;
+    onDevice('phone:' + m.id, at);
+  }
   else if (m.type === 'vote') {
     const p = S.players.find(o => o.binding === 'phone:' + m.id);
     if (p && Q && Q.type === 'vote' && Q.view === 'question') { Q.votes[p.id] = String(m.choice || '').slice(0, 60); sfx('bind'); render(); }
@@ -252,7 +271,7 @@ function pushState(force) {
     if (s !== lastPush || force) { lastPush = s; post('/api/state', `${auth},"state":${s}}`); }
     const h = JSON.stringify(hostState());
     if (h !== lastHostPush || force) { lastHostPush = h; post('/api/hoststate', `${auth},"pin":${JSON.stringify(S.settings.hostPin)},"state":${h}}`); }
-  }, 25);
+  }, 5);
 }
 const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => { });
 function netState() {
@@ -615,7 +634,7 @@ function openCell(k) {
   if (Q.modId) {
     Q.view = 'grab'; Q.phase = 'grab-wait';
     const id = Q.id;
-    setTimeout(() => { if (Q && Q.id === id && Q.view === 'grab') { Q.phase = 'grab'; sfx('mod'); render(); } }, 1200);
+    setTimeout(() => { if (Q && Q.id === id && Q.view === 'grab') { Q.phase = 'grab'; markArmed(); sfx('mod'); render(); } }, 1200);
   } else startMain();
   render();
 }
@@ -653,7 +672,7 @@ function beginQuestion() {
   Q.view = 'question'; Q.phase = 'reading';
   if (!S.settings.autoArm || Q.type === 'closest') return;
   if (Q.only) { Q.answering = Q.only; Q.phase = 'answering'; Q.overtime = false; startTimer(S.settings.answerTime, 'answer'); }
-  else { Q.phase = 'armed'; startTimer(S.settings.buzzTime, 'buzz'); }
+  else { Q.phase = 'armed'; markArmed(); startTimer(S.settings.buzzTime, 'buzz'); }
 }
 function startTimer(sec, kind) { sec = Number(sec) || 0; Q.timer = sec > 0 ? { end: Date.now() + sec * 1000, total: sec * 1000, kind } : null; }
 function reveal() {
@@ -793,21 +812,48 @@ function applyMod(m, pid, tid) {
   }
   return '';
 }
-function buzz(pid) {
+/* ---------- честный «кто первый» ----------
+   Телефоны сверяют часы с сервером и присылают точное время нажатия (at, по часам сервера).
+   Первое нажатие открывает короткое окно: собираем все нажатия, пришедшие за это время,
+   и отдаём ответ тому, кто нажал раньше, — а не тому, у кого интернет быстрее. */
+const RACE_MS = 120;
+const serverNow = () => Date.now() + (NET.off || 0);
+const markArmed = () => { Q.armedAt = serverNow(); Q.race = null; };
+function race(pid, at, onWin) {
+  if (!Q.race) {
+    const qid = Q.id, phase = Q.phase, wait = S.players.some(p => p.binding && p.binding.startsWith('phone:')) ? RACE_MS : 0;
+    Q.race = { list: [], phase };
+    setTimeout(() => {
+      if (!Q || Q.id !== qid || !Q.race || Q.race.phase !== phase) return;
+      const list = Q.race.list.sort((a, b) => a.at - b.at); Q.race = null;
+      if (Q.phase === phase && list.length) onWin(list);
+    }, wait);
+  }
+  if (!Q.race.list.some(x => x.pid === pid)) Q.race.list.push({ pid, at });
+}
+function buzz(pid, at) {
   if (S.screen === 'setup') { flashRow(pid); return; }
   if (S.screen !== 'game' || !G) return;
   if (!Q) { ping(pid); return; }
+  if (at == null) at = serverNow();
+  const early = Q.armedAt != null && at < Q.armedAt - 40;   // нажал до разрешения, просто сообщение пришло позже
   if (Q.view === 'grab') {
-    if (Q.phase === 'grab') grabMod(pid);
-    else if (S.settings.falseStart) falseStart(pid);
+    if (Q.phase !== 'grab' || early) { if (S.settings.falseStart) falseStart(pid); return; }
+    if ((falseUntil[pid] || 0) > Date.now()) return;
+    race(pid, Math.max(at, Q.armedAt || 0), list => grabMod(list[0].pid));
     return;
   }
   if (Q.view !== 'question' || Q.only || Q.type === 'closest' || Q.type === 'vote') return;
   if (Q.phase === 'reading') { if (S.settings.falseStart && !Q.tried.includes(pid)) falseStart(pid); return; }
   if (Q.phase === 'armed') {
     if (Q.tried.includes(pid) || (falseUntil[pid] || 0) > Date.now()) return;
-    Q.answering = pid; Q.phase = 'answering'; Q.overtime = false;
-    sfx('buzz'); startTimer(S.settings.answerTime, 'answer'); render();
+    if (early) { if (S.settings.falseStart) falseStart(pid); return; }
+    race(pid, Math.max(at, Q.armedAt || 0), list => {
+      const win = list.find(x => !Q.tried.includes(x.pid));
+      if (!win) return;
+      Q.answering = win.pid; Q.phase = 'answering'; Q.overtime = false;
+      sfx('buzz'); startTimer(S.settings.answerTime, 'answer'); render();
+    });
   }
 }
 function falseStart(pid) {
@@ -831,7 +877,7 @@ function answerWrong() {
   Q.tried.push(p.id); Q.answering = null; Q.overtime = false; Q.timer = null;
   sfx('bad'); save();
   if (Q.only || S.players.every(o => Q.tried.includes(o.id))) return reveal();
-  Q.phase = 'armed'; startTimer(S.settings.buzzTime, 'buzz'); render();
+  Q.phase = 'armed'; markArmed(); startTimer(S.settings.buzzTime, 'buzz'); render();
 }
 function closestWin(pid) {
   if (!Q || Q.type !== 'closest' || Q.view !== 'answer' || Q.won.includes(pid)) return;
@@ -1051,7 +1097,7 @@ function act(a, d = {}) {
     case 'arm':
       if (!inQ('question') || Q.phase !== 'reading') break;
       if (Q.only) { Q.answering = Q.only; Q.phase = 'answering'; Q.overtime = false; startTimer(S.settings.answerTime, 'answer'); }
-      else { Q.phase = 'armed'; startTimer(S.settings.buzzTime, 'buzz'); tone(600, .08, 'sine', .08); }
+      else { Q.phase = 'armed'; markArmed(); startTimer(S.settings.buzzTime, 'buzz'); tone(600, .08, 'sine', .08); }
       render(); break;
     case 'reveal': if (inQ('question')) reveal(); break;
     case 'right': if (inQ('question') && Q.phase === 'answering') answerRight(); break;
