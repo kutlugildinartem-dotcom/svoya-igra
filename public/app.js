@@ -1039,6 +1039,7 @@ function hostKey(e) {
 
 /* =================== действия =================== */
 document.addEventListener('click', e => {
+  if (E.suppressClick) { E.suppressClick = false; return; }   // это был конец перетаскивания, а не клик
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
   if (el.tagName === 'BUTTON') { el.blur(); if (el.closest('summary')) e.preventDefault(); }
@@ -1418,7 +1419,7 @@ function edInput(el) {
   if (E.sel && /\.(value|text|answer)$/.test(el.dataset.path)) {
     const c = $('.ed-cell.on'); if (c) c.innerHTML = cellInner(E.sel.r, E.sel.t, E.sel.q);
   }
-  if (/^rounds\.\d+\.name$/.test(el.dataset.path)) { const i = +el.dataset.path.split('.')[1], n = $(`.nav-b[data-v="r${i}"]`); if (n) n.textContent = (i + 1) + '. ' + el.value; }
+  if (/^rounds\.\d+\.name$/.test(el.dataset.path)) { const i = +el.dataset.path.split('.')[1], n = $(`.nav-b[data-v="r${i}"]`); if (n) n.innerHTML = `<span class="grip">⠿</span>${i + 1}. ${esc(el.value)}`; }
 }
 function bankCount() { return S.pack.bank.reduce((s, t) => s + t.questions.length, 0); }
 function renderEditor() {
@@ -1429,7 +1430,7 @@ function renderEditor() {
     <aside class="ed-nav">
       <div class="logo sm">РЕДАКТОР</div>
       <button class="nav-b ${E.tab === 'pack' ? 'on' : ''}" data-act="ed-tab" data-v="pack">📦 Пакет</button>
-      ${pk.rounds.map((r, i) => `<button class="nav-b ${E.tab === 'r' + i ? 'on' : ''}" data-act="ed-tab" data-v="r${i}">${i + 1}. ${esc(r.name)}</button>`).join('')}
+      ${pk.rounds.map((r, i) => `<button class="nav-b ${E.tab === 'r' + i ? 'on' : ''}" data-act="ed-tab" data-v="r${i}" data-round="${i}" title="Зажми и перетащи, чтобы поменять порядок"><span class="grip">⠿</span>${i + 1}. ${esc(r.name)}</button>`).join('')}
       <button class="nav-b add" data-act="ed-addround">+ Раунд</button>
       <button class="nav-b ${E.tab === 'final' ? 'on' : ''}" data-act="ed-tab" data-v="final">🏁 Финал</button>
       <button class="nav-b ${E.tab === 'mods' ? 'on' : ''}" data-act="ed-tab" data-v="mods">✨ Модификаторы</button>
@@ -1602,6 +1603,61 @@ document.addEventListener('drop', e => {
   swapCells(from, { r: +c.dataset.r, t: +c.dataset.t, q: +c.dataset.q });
 });
 document.addEventListener('dragend', () => { E.drag = null; $$('.ed-cell.over,.ed-cell.dragging').forEach(x => x.classList.remove('over', 'dragging')); });
+
+/* ---------- перетаскивание раундов в списке слева: зажал — потянул — отпустил ---------- */
+function moveRound(from, to) {
+  const pk = S.pack;
+  if (from === to || from < 0 || to < 0 || from >= pk.rounds.length || to >= pk.rounds.length) return;
+  // запоминаем сами раунды, чтобы после перестановки открытый раунд, выбранная клетка и идущая игра остались на своих
+  const openR = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null, selR = E.sel ? pk.rounds[E.sel.r] : null, gameR = G ? pk.rounds[G.round] : null;
+  const [r] = pk.rounds.splice(from, 1);
+  pk.rounds.splice(to, 0, r);
+  if (openR) E.tab = 'r' + pk.rounds.indexOf(openR);
+  if (selR) E.sel.r = pk.rounds.indexOf(selR);
+  if (gameR) { G.round = pk.rounds.indexOf(gameR); save(); }
+  savePack(); renderEditor();
+  toast(`«${r.name}» — теперь ${to + 1}-й раунд`);
+}
+let roundDrag = null;
+function endRoundDrag(drop) {
+  const d = roundDrag; roundDrag = null;
+  if (!d || !d.active) return;
+  document.body.classList.remove('dragging-round');
+  E.suppressClick = true; setTimeout(() => { E.suppressClick = false; }, 300);
+  if (drop && d.to !== d.from) moveRound(d.from, d.to); else renderEditor();
+}
+document.addEventListener('pointerdown', e => {
+  const el = e.button === 0 && e.target.closest && e.target.closest('.nav-b[data-round]');
+  if (el) roundDrag = { el, from: +el.dataset.round, to: +el.dataset.round, y0: e.clientY, active: false };
+});
+document.addEventListener('pointermove', e => {
+  const d = roundDrag; if (!d) return;
+  const dy = e.clientY - d.y0;
+  if (!d.active) {
+    if (Math.abs(dy) < 5) return;   // маленький сдвиг — это ещё клик
+    d.active = true; d.el.classList.add('dragging'); document.body.classList.add('dragging-round');
+  }
+  d.el.style.transform = `translateY(${dy}px)`;
+  const items = $$('.nav-b[data-round]');
+  let to = d.from;
+  items.forEach((it, i) => {
+    if (it === d.el) return;
+    const r = it.getBoundingClientRect(), mid = r.top + r.height / 2;
+    if (i < d.from && e.clientY < mid) to = Math.min(to, i);
+    if (i > d.from && e.clientY > mid) to = Math.max(to, i);
+  });
+  d.to = to;
+  // остальные раунды плавно разъезжаются, освобождая место, куда упадёт перетаскиваемый
+  const step = d.el.getBoundingClientRect().height + 4;
+  items.forEach((it, i) => {
+    if (it === d.el) return;
+    const shift = to > d.from && i > d.from && i <= to ? -step : to < d.from && i >= to && i < d.from ? step : 0;
+    it.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+});
+document.addEventListener('pointerup', () => endRoundDrag(true));
+document.addEventListener('pointercancel', () => endRoundDrag(false));
+document.addEventListener('keydown', e => { if (e.code === 'Escape' && roundDrag && roundDrag.active) endRoundDrag(false); });
 
 function edAct(a, d) {
   if (a.startsWith('ed-reg')) { regAct(a, d); return; }
