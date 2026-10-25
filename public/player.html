@@ -57,6 +57,9 @@ h1 span{color:var(--accent)}
 .ways button.on{background:color-mix(in srgb,var(--accent) 25%,var(--surface));color:var(--text);box-shadow:inset 0 0 0 1.5px var(--accent)}
 .panel{background:var(--surface);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px}
 .panel b{font-size:17px}
+.bet-quick{display:flex;gap:6px}
+.bet-quick button{flex:1;background:var(--surface2);border-radius:12px;padding:12px 4px;font-weight:800;font-size:14px}
+.bet-quick button:active{background:var(--accent);color:#fff}
 .fr-list{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .fr-list button{background:var(--surface2);border-radius:14px;padding:16px 8px;font-weight:800;font-size:16px;line-height:1.15}
 .fr-list button:not(:disabled):active{background:var(--bad);color:#fff}
@@ -105,6 +108,7 @@ h1 span{color:var(--accent)}
   <div class="panel hidden" id="bet">
     <b>Финал: твоя ставка</b><div class="muted" id="bet-hint"></div>
     <input class="inp" id="bet-v" type="number" inputmode="numeric" placeholder="Ставка">
+    <div class="bet-quick"><button data-bq="all">Ва-банк</button><button data-bq="half">Половина</button><button data-bq="min">Минимум</button></div>
     <button class="btn" id="bet-send">Отправить тайно</button>
   </div>
   <div class="panel hidden" id="fans">
@@ -249,6 +253,13 @@ async function keepAwake() { try { if ('wakeLock' in navigator) await navigator.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && es) keepAwake(); });
 
 $('#bet-send').onclick = () => { const v = Number($('#bet-v').value); if (!v) return; send({ type: 'bet', value: v }); sentBet = true; draw(); };
+document.querySelector('.bet-quick').addEventListener('click', e => {   // быстрые ставки: ва-банк, половина, минимум
+  const b = e.target.closest('[data-bq]'); if (!b || !state) return;
+  const me = state.players.find(p => p.binding === 'phone:' + myId); if (!me) return;
+  const all = Math.max(1, me.score);
+  $('#bet-v').value = b.dataset.bq === 'all' ? all : b.dataset.bq === 'half' ? Math.max(1, Math.round(all / 2 / 100) * 100 || Math.round(all / 2)) : 1;
+  if (navigator.vibrate) navigator.vibrate(15);
+});
 $('#fans-send').onclick = () => { const v = $('#fans-v').value.trim(); if (!v) return; send({ type: 'answer', text: v }); sentAns = true; draw(); };
 $('#fr-list').addEventListener('click', e => {
   const b = e.target.closest('[data-i]'); if (!b || b.disabled) return;
@@ -339,7 +350,8 @@ function draw() {
   const inFinal = me && state.final && state.final.parts.includes(me.id);
   const betSent = sentBet || (inFinal && state.final.bets.includes(me.id));
   $('#bet').classList.toggle('hidden', !(inFinal && ph === 'final-bet'));
-  $('#bet-hint').textContent = betSent ? '✓ Ставка у ведущего. Можно поменять и отправить ещё раз.' : me ? `От 1 до ${fmt(Math.max(1, me.score))}` : '';
+  $('#bet-hint').textContent = betSent ? '✓ Ставка у ведущего. Можно поменять и отправить ещё раз.'
+    : me ? (state.final && state.final.betFree ? `Любая сумма (у тебя ${fmt(me.score)}). Верно: +ставка, неверно: −ставка` : `От 1 до ${fmt(Math.max(1, me.score))}. Верно: +ставка, неверно: −ставка`) : '';
   $('#fans').classList.toggle('hidden', !(inFinal && ph === 'final-answer'));
   $('#fans-send').textContent = sentAns ? '✓ Отправлено (можно исправить)' : 'Отправить';
   // финал: убираем темы по очереди — в свою очередь игрок убирает тему касанием

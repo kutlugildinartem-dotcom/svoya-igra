@@ -32,7 +32,7 @@ const THEMES = [
 const ACCENTS = ['#7c6cff', '#ff6b5e', '#2ad1a3', '#f5c542', '#3ea6ff', '#ff5fa2', '#ff9f43'];
 const PCOLORS = ['#ff6b5e', '#3ea6ff', '#2ad1a3', '#f5c542', '#b07cff', '#ff5fa2', '#ff9f43', '#7bd389'];
 const TIMES = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120];
-const DEFAULT_SETTINGS = { theme: 'dark', accent: '#7c6cff', buzzTime: 15, answerTime: 10, finalTime: 45, falseStart: true, sound: true, autoArm: false, autoJoin: true, hostRemote: false, hostName: '', hostPin: String(1000 + Math.floor(Math.random() * 9000)) };
+const DEFAULT_SETTINGS = { theme: 'dark', accent: '#7c6cff', buzzTime: 15, answerTime: 10, finalTime: 45, falseStart: true, sound: true, autoArm: false, autoJoin: true, betFree: false, hostRemote: false, hostName: '', hostPin: String(1000 + Math.floor(Math.random() * 9000)) };
 const BADGES = { immune: ['∞', 'Бессмертие'], double: ['×2', 'Двойной удар'], shield: ['🛡', 'Щит'] };
 const MOD_TYPES = {
   add: { label: 'Прибавить себе (минус — отнять)', amount: true },
@@ -322,7 +322,7 @@ function netState() {
     answering: Q ? Q.answering : null, only: Q ? Q.only : null, tried: Q ? Q.tried : [],
     players: S.players.map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score, binding: p.binding })),
     final: F ? {
-      parts: F.parts, bets: Object.keys(F.bets), answers: Object.keys(F.answers),
+      parts: F.parts, bets: Object.keys(F.bets), answers: Object.keys(F.answers), betFree: !!S.settings.betFree,
       turn: F.phase === 'remove' && F.theme == null ? F.parts[F.turn % F.parts.length] : null,
       themes: F.phase === 'remove' ? S.pack.final.themes.map((t, i) => ({ name: t.name, gone: F.removed.includes(i) })) : null,
     } : null,
@@ -394,7 +394,7 @@ function hostState() {
     else {
       const t = fin[F.theme];
       st.q = { theme: 'Финал · ' + t.name, value: '', text: t.text, answer: t.answer || '—', type: 'final', media: t.media && t.media.src ? t.media.kind : '' };
-      if (F.phase === 'bet') { st.status = 'Собери ставки'; F.parts.forEach(pid => { const p = player(pid); st.inputs.push({ id: pid, label: `${p.name} (1–${fmt(Math.max(1, p.score))})`, value: F.bets[pid] != null ? F.bets[pid] : '', a: 'f-bet', secret: true }); }); A('Показать вопрос →', 'f-go', { force: 1 }, 'primary'); }
+      if (F.phase === 'bet') { st.status = 'Собери ставки'; F.parts.forEach(pid => { const p = player(pid); st.inputs.push({ id: pid, label: `${p.name} (1–${fmt(betMax(p))})`, value: F.bets[pid] != null ? F.bets[pid] : '', a: 'f-bet', secret: true }); }); A('Показать вопрос →', 'f-go', { force: 1 }, 'primary'); }
       else if (F.phase === 'question') { st.status = F.timer ? 'Идёт время' : F.started ? 'Время вышло' : 'Прочитай вопрос'; if (!F.started) A('Старт', 'f-start', null, 'primary'); A('Проверить ответы →', 'f-check'); }
       else {
         st.status = 'Проверка ответов';
@@ -503,6 +503,7 @@ function settingsPanel() {
     <div class="nums">${timeSel('buzzTime', 'На «нажать»')}${timeSel('answerTime', 'На ответ')}${timeSel('finalTime', 'В финале')}</div>
     <label class="check"><input type="checkbox" data-set="autoArm" ${st.autoArm ? 'checked' : ''}> Отвечать сразу — жать можно, как только появился вопрос, без разрешения ведущего</label>
     <label class="check"><input type="checkbox" data-set="falseStart" ${st.falseStart ? 'checked' : ''}> Фальстарт: нажал до разрешения — блок на 1 сек</label>
+    <label class="check"><input type="checkbox" data-set="betFree" ${st.betFree ? 'checked' : ''}> Ставка в финале может быть больше своего счёта (можно уйти в минус)</label>
     <label class="check"><input type="checkbox" data-set="sound" ${st.sound ? 'checked' : ''}> Звуки</label>`;
 }
 function flashRow(pid) {
@@ -913,7 +914,12 @@ function nextRound() {
 }
 
 /* ---------- финал ---------- */
-const clampBet = (p, v) => Math.max(1, Math.min(Math.max(1, p.score), Math.round(Number(v) || 0)));
+// ставка в финале: верный ответ — плюс ставка, неверный — минус ставка.
+// Классика — не больше своего счёта; с настройкой betFree — любая (можно уйти в минус)
+const BET_FREE_MAX = 1000000;
+const betMax = p => S.settings.betFree ? BET_FREE_MAX : Math.max(1, p.score);
+const clampBet = (p, v) => Math.max(1, Math.min(betMax(p), Math.round(Number(v) || 0)));
+const betRuleText = () => S.settings.betFree ? 'Ставка любая — хоть больше своего счёта. Верно: +ставка, неверно: −ставка' : 'Ставка — от 1 до своего счёта. Верно: +ставка, неверно: −ставка';
 function setBet(p, v, phone) {
   if (v === '' || v == null) delete F.bets[p.id]; else F.bets[p.id] = clampBet(p, v);
   if (phone) F.phoneBet[p.id] = true; else delete F.phoneBet[p.id];
@@ -942,7 +948,7 @@ function finalHTML() {
   const t = finalTheme();
   if (F.phase === 'bet') {
     return `<div class="center"><div class="kicker">Финал · тема</div><div class="big-sign" style="font-size:clamp(34px,5vw,80px)">${esc(t.name)}</div>
-      <div class="status muted" style="font-size:20px">Делайте ставки — от 1 до своего счёта</div>
+      <div class="status muted" style="font-size:20px">Делайте ставки! ${esc(betRuleText())}</div>
       <div class="bets">${F.parts.map(pid => { const p = player(pid); return `<div class="bet" style="--c:${p.color}"><div class="nm"><span>${esc(p.name)}</span><span class="muted">${fmt(p.score)}</span></div>
         <input class="inp ctl" type="password" inputmode="numeric" autocomplete="off" placeholder="Ставка" data-bet="${pid}" value="${F.bets[pid] != null ? F.bets[pid] : ''}"><div class="hint" data-betflag="${pid}"></div></div>`; }).join('')}</div>
       <button class="btn ctl" data-act="f-go" id="f-go">Показать вопрос →</button></div>`;
