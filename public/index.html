@@ -235,12 +235,52 @@ body.remote .controls,body.remote .ctl{display:none!important}
 .nav-b{background:transparent;border:0;text-align:left;padding:10px 12px;border-radius:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nav-b:hover{background:var(--surface2)}.nav-b.on{background:var(--accent);color:var(--accent-ink)}
 .nav-b.add{color:var(--muted);font-weight:600}
-.nav-b[data-round]{cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;position:relative;transition:transform .15s ease}
+.nav-b[data-round]{cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;position:relative}
 .nav-b .grip{opacity:.35;margin-right:7px;font-size:12px}
 .nav-b[data-round]:hover .grip{opacity:.8}
-.nav-b.dragging{z-index:5;cursor:grabbing;background:var(--surface2);box-shadow:0 10px 28px rgba(0,0,0,.4),inset 0 0 0 2px var(--accent);transition:none}
-.nav-b.on.dragging{background:var(--accent)}
-body.dragging-round,body.dragging-round *{cursor:grabbing!important}
+.ed-game{font-size:12px;font-weight:800;color:var(--muted);padding:0 12px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* перетаскивание */
+body.dragging-any,body.dragging-any *{cursor:grabbing!important;user-select:none!important}
+#drag-ghost{position:fixed;left:0;top:0;z-index:500;pointer-events:none;background:var(--surface);color:var(--text);border-radius:12px;padding:10px 14px;font-weight:800;font-size:14px;box-shadow:0 14px 34px rgba(0,0,0,.45),inset 0 0 0 2px var(--accent);max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drag-src{opacity:.35}
+.nav-b.drop-before{box-shadow:inset 0 3px 0 var(--accent)}
+.nav-b.drop-after{box-shadow:inset 0 -3px 0 var(--accent)}
+.nav-b.drop-into,.ed-cell.drop-into{outline:2px dashed var(--accent);outline-offset:2px}
+.ed-theme.drop-before{box-shadow:0 -6px 0 -2px var(--accent)}
+.ed-theme.drop-after{box-shadow:0 6px 0 -2px var(--accent)}
+.ed-board.drop-end{box-shadow:0 6px 0 -2px var(--accent)}
+.ed-tcol{cursor:grab}
+.ed-tcol .inp{cursor:text}
+.tgrip{color:var(--muted);font-size:15px;padding:0 6px;cursor:grab;user-select:none}
+.ed-cell[data-q]{touch-action:none}
+
+/* «+» и список игр на рамке названия */
+.title-wrap{position:relative;display:flex;align-items:center;flex:1;min-width:260px;max-width:520px}
+.title-wrap .inp.title{max-width:none;width:100%;padding-right:58px}
+.games{position:absolute;right:8px;top:50%;transform:translateY(-50%);z-index:40}
+.games.inline{position:relative;right:auto;top:auto;transform:none}
+.games-plus{width:40px;height:40px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);font-size:26px;font-weight:800;line-height:1;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);padding:0 0 3px}
+.games:hover .games-plus{animation:plus-spin .9s cubic-bezier(.25,.8,.3,1)}
+body.dragging-any .games-plus{animation:plus-loop .9s linear infinite}
+@keyframes plus-spin{to{transform:rotate(1080deg)}}
+@keyframes plus-loop{to{transform:rotate(360deg)}}
+.games-pop{position:absolute;right:0;top:100%;padding-top:10px;pointer-events:none}
+.games-menu{width:320px;background:var(--surface);border-radius:16px;padding:8px;box-shadow:0 20px 44px rgba(0,0,0,.5),inset 0 0 0 1px var(--line);opacity:0;transform:translateY(-10px) scale(.96);transform-origin:top right;transition:opacity .2s,transform .2s;max-height:70vh;overflow:auto}
+.games:hover .games-pop,body.dragging-any .games-pop{pointer-events:auto}
+.games:hover .games-menu,body.dragging-any .games-menu{opacity:1;transform:none}
+.games-head{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:6px 8px 8px}
+.game-item{position:relative;display:flex;align-items:center;gap:8px;padding:10px 10px;border-radius:10px;cursor:pointer;font-weight:700;overflow:hidden}
+.game-item:hover{background:var(--surface2)}
+.game-item.on{box-shadow:inset 0 0 0 2px var(--accent)}
+.game-item .gname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.game-item .gmeta{font-size:11px;color:var(--accent);font-weight:800}
+.game-item .gdel{width:28px;height:28px;opacity:.5}
+.game-item:hover .gdel{opacity:1}
+.game-item.arming{background:var(--surface2)}
+.game-item.arming::after{content:"";position:absolute;left:0;bottom:0;height:3px;background:var(--accent);animation:arm-fill .9s linear forwards}
+@keyframes arm-fill{from{width:0}to{width:100%}}
+.game-select{width:auto!important;max-width:260px;padding:6px 10px!important}
 .ed-save{font-size:12px;color:var(--muted);padding:8px 12px}
 .ed-main{overflow:auto;padding:22px 26px 60px}
 .ed-head{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}

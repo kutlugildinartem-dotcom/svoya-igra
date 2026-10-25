@@ -21,6 +21,7 @@ const DB = {
   open() { return this._p || (this._p = new Promise((res, rej) => { const r = indexedDB.open('svoyak', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); },
   async get(k) { try { const db = await this.open(); return await new Promise((res, rej) => { const t = db.transaction('kv').objectStore('kv').get(k); t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error); }); } catch { return undefined; } },
   async set(k, v) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { console.warn(e); return false; } },
+  async del(k) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch { return false; } },
 };
 
 /* =================== константы =================== */
@@ -414,7 +415,7 @@ function renderSetup() {
   <div class="setup">
     <header class="setup-head">
       <div class="logo">СВОЯ<span>ИГРА</span></div>
-      <div class="pack-name">Пакет: <b>${esc(S.pack.name)}</b></div>
+      <label class="pack-name">Игра: <select class="inp sm game-select" id="game-select">${GAMES.list.map(g => `<option value="${g.id}" ${g.id === S.packId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
       <div class="grow"></div>
       <button class="btn ghost" data-act="fullscreen">⛶ Полный экран</button>
       <button class="btn outline" data-act="editor">✎ Редактор вопросов</button>
@@ -505,7 +506,7 @@ function flashRow(pid) {
 function startGame() {
   if (S.players.length < 2) return alert('Нужно минимум 2 игрока');
   S.players.forEach(p => { p.score = 0; p.badges = {}; });
-  G = { round: 0, used: {}, chooser: pick(S.players).id, modCells: {}, phase: 'intro' };
+  G = { round: 0, used: {}, chooser: pick(S.players).id, modCells: {}, phase: 'intro', packId: S.packId };
   F = null; Q = null;
   setupRound();
   S.screen = 'game'; save(); render();
@@ -1073,7 +1074,14 @@ function act(a, d = {}) {
       }
       save(); render(); break;
     case 'start': if (LS.get('svoyak-save', null) && !confirm('Начать новую игру? Сохранённая игра будет сброшена.')) break; capture = null; startGame(); break;
-    case 'continue': { const sv = LS.get('svoyak-save', null); if (!sv) break; G = sv.G; F = sv.F; Q = null; capture = null; if (!S.pack.rounds[G.round]) G.round = 0; S.screen = 'game'; render(); break; }
+    case 'continue': {
+      const sv = LS.get('svoyak-save', null); if (!sv) break;
+      (async () => {   // сохранённая партия могла идти в другой игре — открываем её
+        if (sv.G.packId && sv.G.packId !== S.packId && GAMES.list.some(g => g.id === sv.G.packId)) await loadPack(sv.G.packId);
+        G = sv.G; F = sv.F; Q = null; capture = null; if (!S.pack.rounds[G.round]) G.round = 0; S.screen = 'game'; render();
+      })();
+      break;
+    }
     /* игра */
     case 'menu': menuModal(); break;
     case 'to-setup': closeModal(); Q = null; save(); S.screen = 'setup'; render(); break;
@@ -1174,6 +1182,7 @@ document.addEventListener('change', e => {
   const el = e.target, ds = el.dataset;
   if (ds.set === 'accent' || ds.set === 'hostRemote') { render(); return; }
   if (el.id === 'reg-import' && el.files && el.files[0]) { regImport(el.files[0]); return; }
+  if (el.id === 'game-select') { loadPack(el.value).then(() => { renderSetup(); toast(`Играем в «${S.pack.name}»`); }); return; }
   if (S.screen !== 'editor') return;
   if (ds.media && el.files && el.files[0]) loadMediaFile(ds.media, el.files[0]);
   else if (ds.mediaurl !== undefined && el.value.trim()) { setPath(S.pack, ds.mediaurl, { kind: kindByName(el.value), src: el.value.trim(), name: el.value.trim() }); savePack(); renderEditor(); }
@@ -1184,12 +1193,67 @@ document.addEventListener('change', e => {
 /* =================== редактор =================== */
 const E = { tab: 'pack', sel: null, back: 'setup', drag: null };
 const blankQ = () => ({ type: 'normal', text: '', answer: '', media: null, answerMedia: null, modifier: '', value: 0 });
+/* ---------- несколько игр: каждая — свой пакет (раунды, финал, модификаторы, запас) ---------- */
+const GAMES = { list: [] };   // [{ id, name, updated }] — порядок как в списке
 let saveT;
+async function persistPack() {
+  if (!S.packId) return false;
+  const ok = await DB.set('pack:' + S.packId, S.pack);
+  const g = GAMES.list.find(x => x.id === S.packId);
+  if (g) { g.name = S.pack.name; g.updated = Date.now(); } else GAMES.list.push({ id: S.packId, name: S.pack.name, updated: Date.now() });
+  await DB.set('packs-index', GAMES.list);
+  return ok;
+}
 function savePack() {
   S.pack.builtin = false;
   const el = $('#ed-save'); if (el) el.textContent = 'Сохраняю…';
   clearTimeout(saveT);
-  saveT = setTimeout(async () => { const ok = await DB.set('pack', S.pack); const el2 = $('#ed-save'); if (el2) el2.textContent = ok ? '✓ Сохранено' : '⚠ Не удалось сохранить'; }, 400);
+  saveT = setTimeout(async () => { const ok = await persistPack(); const el2 = $('#ed-save'); if (el2) el2.textContent = ok ? '✓ Сохранено' : '⚠ Не удалось сохранить'; }, 400);
+}
+async function flushPack() { if (saveT) { clearTimeout(saveT); saveT = null; await persistPack(); } }
+async function loadPack(id, noFlush) {
+  if (!noFlush) await flushPack();
+  const p = await DB.get('pack:' + id);
+  if (!p) return false;
+  S.pack = normalizePack(p); S.packId = id; LS.set('svoyak-current-pack', id);
+  return true;
+}
+async function newGame(fromPack) {
+  await flushPack();
+  const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const base = fromPack || { name: 'Игра ' + (GAMES.list.length + 1), rounds: [1, 2, 3, 4].map(n => ({ name: 'Раунд ' + n, randomMods: 2, themes: [] })), final: { themes: [] }, modifiers: clone(window.DEFAULT_PACK.modifiers), bank: [] };
+  S.pack = normalizePack(base); S.pack.builtin = false; S.packId = id;
+  LS.set('svoyak-current-pack', id);
+  await persistPack();
+  E.tab = 'r0'; E.sel = null; renderEditor(); sfx('mod');
+  toast(`Создана «${S.pack.name}». Прошлая игра сохранена — она в списке игр под «+»`);
+}
+async function gamesAct(a, d) {
+  if (a === 'ed-newgame') return newGame();
+  if (a === 'ed-opengame') {
+    if (!d.game || d.game === S.packId) return;
+    await loadPack(d.game); E.sel = null; E.tab = 'r0'; renderEditor();
+    return toast(`Открыта игра «${S.pack.name}»`);
+  }
+  if (a === 'ed-delgame') {
+    const g = GAMES.list.find(x => x.id === d.game);
+    if (!g || GAMES.list.length <= 1) return;
+    if (!confirm(`Удалить игру «${g.name}»? Её раунды и вопросы пропадут (реестр не тронется).`)) return;
+    GAMES.list = GAMES.list.filter(x => x.id !== d.game);
+    await DB.set('packs-index', GAMES.list); await DB.del('pack:' + d.game);
+    if (d.game === S.packId) { saveT = null; await loadPack(GAMES.list[0].id, true); E.tab = 'r0'; E.sel = null; }
+    renderEditor(); toast(`Игра «${g.name}» удалена`);
+  }
+}
+function gamesWidget(inline) {
+  return `<div class="games ${inline ? 'inline' : ''}">
+    <button class="games-plus" data-act="ed-newgame" title="Новая игра (текущая сохранится)">+</button>
+    <div class="games-pop"><div class="games-menu">
+      <div class="games-head">Игры <span class="muted">${GAMES.list.length}</span></div>
+      ${GAMES.list.map(g => `<div class="game-item ${g.id === S.packId ? 'on' : ''}" data-act="ed-opengame" data-game="${g.id}"><span class="gname">🎮 ${esc(g.name)}</span>${g.id === S.packId ? '<span class="gmeta">открыта</span>' : ''}${GAMES.list.length > 1 ? `<button class="icon gdel" data-act="ed-delgame" data-game="${g.id}" title="Удалить игру">🗑</button>` : ''}</div>`).join('')}
+      <button class="btn sm" data-act="ed-newgame" style="width:100%;margin-top:6px">+ Новая игра</button>
+      <p class="hint" style="margin:8px 4px 2px;font-size:12px">Перетащи раунд, тему или вопрос на игру в этом списке и подержи секунду — она откроется, и туда можно будет вставить. В другую игру переносится копия.</p>
+    </div></div></div>`;
 }
 function normTheme(t) {
   t.name = t.name || ''; t.desc = t.desc || '';
@@ -1222,8 +1286,7 @@ function importPack(file) {
     try {
       const p = JSON.parse(r.result);
       if (!p || !Array.isArray(p.rounds)) throw new Error('нет раундов');
-      S.pack = normalizePack(p); savePack(); E.tab = 'pack'; E.sel = null; renderEditor();
-      alert('Пакет «' + S.pack.name + '» загружен');
+      newGame(p);   // импортированный пакет становится новой игрой, текущая не трогается
     } catch (err) { alert('Не получилось прочитать пакет: ' + err.message); }
   };
   r.readAsText(file);
@@ -1419,6 +1482,7 @@ function edInput(el) {
   if (E.sel && /\.(value|text|answer)$/.test(el.dataset.path)) {
     const c = $('.ed-cell.on'); if (c) c.innerHTML = cellInner(E.sel.r, E.sel.t, E.sel.q);
   }
+  if (el.dataset.path === 'name') { const g = $('.ed-game'); if (g) g.textContent = '🎮 ' + el.value; }
   if (/^rounds\.\d+\.name$/.test(el.dataset.path)) { const i = +el.dataset.path.split('.')[1], n = $(`.nav-b[data-v="r${i}"]`); if (n) n.innerHTML = `<span class="grip">⠿</span>${i + 1}. ${esc(el.value)}`; }
 }
 function bankCount() { return S.pack.bank.reduce((s, t) => s + t.questions.length, 0); }
@@ -1429,6 +1493,7 @@ function renderEditor() {
   app.innerHTML = `<div class="editor">
     <aside class="ed-nav">
       <div class="logo sm">РЕДАКТОР</div>
+      <div class="ed-game" title="Открытая игра">🎮 ${esc(pk.name)}</div>
       <button class="nav-b ${E.tab === 'pack' ? 'on' : ''}" data-act="ed-tab" data-v="pack">📦 Пакет</button>
       ${pk.rounds.map((r, i) => `<button class="nav-b ${E.tab === 'r' + i ? 'on' : ''}" data-act="ed-tab" data-v="r${i}" data-round="${i}" title="Зажми и перетащи, чтобы поменять порядок"><span class="grip">⠿</span>${i + 1}. ${esc(r.name)}</button>`).join('')}
       <button class="nav-b add" data-act="ed-addround">+ Раунд</button>
@@ -1455,20 +1520,20 @@ function edMain() {
   const pk = S.pack;
   if (E.tab === 'pack') {
     const st = packStats();
-    return `<div class="ed-head"><input class="inp title" data-path="name" value="${esc(pk.name)}" placeholder="Название пакета"></div>
+    return `<div class="ed-head"><div class="title-wrap"><input class="inp title" data-path="name" value="${esc(pk.name)}" placeholder="Название игры">${gamesWidget()}</div></div>
       <div class="stat"><div><b>${st.q}</b>в раундах</div><div><b>${bankCount()}</b>в запасе</div><div><b>${pk.rounds.length}</b>раундов</div><div><b>${st.media}</b>с медиа</div><div><b>${st.noAns}</b>без ответа</div><div><b>${st.size}</b>размер</div></div>
       <div class="row wrap gap">
         <button class="btn" data-act="ed-export">⬇ Экспорт пакета</button>
         <label class="btn outline file">⬆ Импорт пакета<input type="file" accept=".json,application/json" id="ed-import" hidden></label>
-        <button class="btn outline" data-act="ed-new">Пустой пакет</button>
+        <button class="btn outline" data-act="ed-newgame">+ Новая игра</button>
         <button class="btn ghost danger" data-act="ed-reset">Сбросить к стандартному</button>
       </div>
-      <p class="hint" style="max-width:720px">Всё сохраняется автоматически в этом браузере. Чтобы перенести пакет или отдать друзьям — «Экспорт» (картинки, звуки и видео лежат внутри файла) и «Импорт» на другом устройстве.</p>
-      <p class="hint" style="max-width:720px"><b>Как редактировать:</b> раунд слева → клик по клетке → справа откроется вопрос. Клетки можно <b>перетаскивать мышкой</b> — вопросы меняются местами, а стоимость остаётся на своём месте. В <b>📚 Запасе</b> лежат темы и вопросы про запас: их можно вставить целиком, поменять с любой клеткой или собрать 🎲 случайную тему.</p>`;
+      <p class="hint" style="max-width:720px">Всё сохраняется автоматически в этом браузере. Игр может быть сколько угодно: «+» на рамке названия создаёт новую, список игр выкатывается при наведении. «Экспорт» сохраняет игру файлом (с картинками и звуками), «Импорт» добавляет игру из файла.</p>
+      <p class="hint" style="max-width:720px"><b>Как редактировать:</b> раунд слева → клик по клетке → справа откроется вопрос. <b>Перетаскивать мышкой</b> можно раунды (в списке слева), темы (за карточку с названием) и вопросы (клетки). Чтобы перенести в другую игру — тащи на неё в списке игр под «+» и подержи секунду: она откроется, бросай куда нужно.</p>`;
   }
   if (E.tab === 'final') {
     const fin = pk.final.themes;
-    return `<div class="ed-head"><div class="logo sm">ФИНАЛ</div><span class="muted">Игроки по очереди убирают темы, на последнюю делают ставки</span></div>
+    return `<div class="ed-head"><div class="logo sm">ФИНАЛ</div><span class="muted grow">Игроки по очереди убирают темы, на последнюю делают ставки</span>${gamesWidget(true)}</div>
       <div class="ed-list">${fin.map((t, i) => { const b = `final.themes.${i}`; return `<div class="ed-item">
         <div class="row"><input class="inp" data-path="${b}.name" value="${esc(t.name)}" placeholder="Тема" style="font-weight:800"><button class="icon" data-act="ed-fdel" data-i="${i}" title="Удалить">🗑</button></div>
         <textarea class="inp" rows="2" data-path="${b}.text" placeholder="Вопрос">${esc(t.text)}</textarea>${mediaEditor(b + '.media', t.media)}
@@ -1476,7 +1541,7 @@ function edMain() {
       <button class="btn outline" data-act="ed-fadd" style="margin-top:12px">+ Тема финала</button>`;
   }
   if (E.tab === 'mods') {
-    return `<div class="ed-head"><div class="logo sm">МОДИФИКАТОРЫ</div></div>
+    return `<div class="ed-head"><div class="logo sm grow">МОДИФИКАТОРЫ</div>${gamesWidget(true)}</div>
       <p class="hint" style="max-width:780px;margin-bottom:16px">Модификатор прячется за клеткой. Когда её открывают, все жмут кнопки — кто первый, тот и забирает. Количество случайных модификаторов задаётся в каждом раунде. Игроки не видят, какой модификатор спрятан, — он раскрывается только тому, кто нажал первым (ведущий видит его на пульте). Тип «Правило» ничего не считает сам — просто объявляет условие, а следит за ним ведущий.</p>
       <div class="ed-list">${pk.modifiers.map((m, i) => { const b = `modifiers.${i}`, def = MOD_TYPES[m.type] || {}; return `<div class="ed-item">
         <div class="mod-grid"><input class="inp emoji" data-path="${b}.emoji" value="${esc(m.emoji)}" maxlength="4">
@@ -1491,7 +1556,7 @@ function edMain() {
   const ri = +E.tab.slice(1), r = pk.rounds[ri];
   if (!r) { E.tab = 'pack'; return edMain(); }
   return `<div class="ed-head">
-      <input class="inp title" data-path="rounds.${ri}.name" value="${esc(r.name)}" placeholder="Название раунда">
+      <div class="title-wrap"><input class="inp title" data-path="rounds.${ri}.name" value="${esc(r.name)}" placeholder="Название раунда">${gamesWidget()}</div>
       <label>Случайных модификаторов <input class="inp sm" type="number" min="0" max="40" data-path="rounds.${ri}.randomMods" data-type="num" value="${Number(r.randomMods) || 0}"></label>
       <button class="btn outline sm" data-act="ed-reg" title="Общий реестр тем и вопросов">🗂 Реестр</button>
       <button class="btn outline sm" data-act="ed-reground" data-r="${ri}" title="Сохранить все темы этого раунда в реестр">💾 Раунд в реестр</button>
@@ -1500,11 +1565,11 @@ function edMain() {
       <button class="btn ghost sm" data-act="ed-autoval" data-r="${ri}" title="Сбросить стоимости на стандартные">Стоимости ${(ri + 1) * 100}…</button>
       <button class="btn ghost sm danger" data-act="ed-delround" data-r="${ri}">Удалить раунд</button>
     </div>
-    <div class="ed-board">${r.themes.map((t, ti) => `<div class="ed-theme" style="--n:${t.questions.length}">
+    <div class="ed-board">${r.themes.map((t, ti) => `<div class="ed-theme" style="--n:${t.questions.length}" data-r="${ri}" data-t="${ti}">
       <div class="ed-tcol"><input class="inp" data-path="rounds.${ri}.themes.${ti}.name" value="${esc(t.name)}" placeholder="Тема" style="font-weight:800">
         <input class="inp desc" data-path="rounds.${ri}.themes.${ti}.desc" value="${esc(t.desc)}" placeholder="Подсказка к теме">
-        <div class="row"><button class="icon" data-act="ed-tup" data-r="${ri}" data-t="${ti}" title="Выше" ${ti ? '' : 'disabled'}>↑</button><button class="icon" data-act="ed-tdown" data-r="${ri}" data-t="${ti}" title="Ниже" ${ti < r.themes.length - 1 ? '' : 'disabled'}>↓</button><div class="grow"></div><button class="icon" data-act="ed-regtheme" data-r="${ri}" data-t="${ti}" title="Сохранить тему в реестр">💾</button><button class="icon" data-act="ed-tobank" data-r="${ri}" data-t="${ti}" title="Убрать тему в запас">📚</button><button class="icon" data-act="ed-tdel" data-r="${ri}" data-t="${ti}" title="Удалить тему">🗑</button></div></div>
-      ${t.questions.map((q, qi) => `<button class="ed-cell ${E.sel && E.sel.r === ri && E.sel.t === ti && E.sel.q === qi ? 'on' : ''}" draggable="true" data-act="ed-sel" data-r="${ri}" data-t="${ti}" data-q="${qi}">${cellInner(ri, ti, qi)}</button>`).join('')}
+        <div class="row"><span class="tgrip" title="Зажми и перетащи тему">⠿</span><button class="icon" data-act="ed-tup" data-r="${ri}" data-t="${ti}" title="Выше" ${ti ? '' : 'disabled'}>↑</button><button class="icon" data-act="ed-tdown" data-r="${ri}" data-t="${ti}" title="Ниже" ${ti < r.themes.length - 1 ? '' : 'disabled'}>↓</button><div class="grow"></div><button class="icon" data-act="ed-regtheme" data-r="${ri}" data-t="${ti}" title="Сохранить тему в реестр">💾</button><button class="icon" data-act="ed-tobank" data-r="${ri}" data-t="${ti}" title="Убрать тему в запас">📚</button><button class="icon" data-act="ed-tdel" data-r="${ri}" data-t="${ti}" title="Удалить тему">🗑</button></div></div>
+      ${t.questions.map((q, qi) => `<button class="ed-cell ${E.sel && E.sel.r === ri && E.sel.t === ti && E.sel.q === qi ? 'on' : ''}" data-act="ed-sel" data-r="${ri}" data-t="${ti}" data-q="${qi}">${cellInner(ri, ti, qi)}</button>`).join('')}
       <button class="ed-cell add" data-act="ed-addq" data-r="${ri}" data-t="${ti}" title="Добавить вопрос">+</button></div>`).join('')}</div>
     <button class="btn outline" data-act="ed-addtheme" data-r="${ri}">+ Тема</button>`;
 }
@@ -1580,87 +1645,137 @@ function swapCells(a, b) {
   else if (E.sel && E.sel.r === b.r && E.sel.t === b.t && E.sel.q === b.q) E.sel = Object.assign({}, a);
   sfx('bind'); savePack(); renderEditor();
 }
-document.addEventListener('dragstart', e => {
-  const c = e.target.closest && e.target.closest('.ed-cell[draggable]');
-  if (!c) return;
-  E.drag = { r: +c.dataset.r, t: +c.dataset.t, q: +c.dataset.q };
-  e.dataTransfer.effectAllowed = 'move';
-  try { e.dataTransfer.setData('text/plain', 'cell'); } catch { }
-  c.classList.add('dragging');
-});
-document.addEventListener('dragover', e => {
-  const c = E.drag && e.target.closest && e.target.closest('.ed-cell[draggable]');
-  if (!c) return;
-  e.preventDefault();
-  $$('.ed-cell.over').forEach(x => { if (x !== c) x.classList.remove('over'); });
-  c.classList.add('over');
-});
-document.addEventListener('drop', e => {
-  const c = E.drag && e.target.closest && e.target.closest('.ed-cell[draggable]');
-  if (!c) return;
-  e.preventDefault();
-  const from = E.drag; E.drag = null;
-  swapCells(from, { r: +c.dataset.r, t: +c.dataset.t, q: +c.dataset.q });
-});
-document.addEventListener('dragend', () => { E.drag = null; $$('.ed-cell.over,.ed-cell.dragging').forEach(x => x.classList.remove('over', 'dragging')); });
-
-/* ---------- перетаскивание раундов в списке слева: зажал — потянул — отпустил ---------- */
-function moveRound(from, to) {
-  const pk = S.pack;
-  if (from === to || from < 0 || to < 0 || from >= pk.rounds.length || to >= pk.rounds.length) return;
-  // запоминаем сами раунды, чтобы после перестановки открытый раунд, выбранная клетка и идущая игра остались на своих
-  const openR = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null, selR = E.sel ? pk.rounds[E.sel.r] : null, gameR = G ? pk.rounds[G.round] : null;
-  const [r] = pk.rounds.splice(from, 1);
-  pk.rounds.splice(to, 0, r);
-  if (openR) E.tab = 'r' + pk.rounds.indexOf(openR);
-  if (selR) E.sel.r = pk.rounds.indexOf(selR);
-  if (gameR) { G.round = pk.rounds.indexOf(gameR); save(); }
-  savePack(); renderEditor();
-  toast(`«${r.name}» — теперь ${to + 1}-й раунд`);
+/* ---------- перетаскивание раундов, тем и вопросов — внутри игры и между играми ----------
+   Зажал и потянул (больше 6 px) → появляется «призрак», «+» крутится, список игр раскрыт.
+   Подержал секунду над другой игрой → она открывается, и туда можно бросить.
+   Внутри одной игры элемент перемещается, в другую игру — копируется. */
+let DR = null;
+function dragTarget(x, y) {
+  const under = document.elementFromPoint(x, y), at = sel => under && under.closest(sel);
+  const pk = S.pack, k = DR.kind;
+  let t = null;
+  if (at('.games')) return { t: null, game: at('.game-item[data-game]') };   // над списком игр — только открываем игру удержанием
+  if (k === 'round') {
+    const nb = at('.nav-b[data-round]');
+    if (nb) { const r = nb.getBoundingClientRect(), after = y > r.top + r.height / 2; t = { index: +nb.dataset.round + (after ? 1 : 0), el: nb, cls: after ? 'drop-after' : 'drop-before' }; }
+    else if (at('.nav-b.add')) t = { index: pk.rounds.length, el: at('.nav-b.add'), cls: 'drop-before' };
+  } else if (k === 'theme') {
+    const row = at('.ed-theme[data-t]'), nb = at('.nav-b[data-round]');
+    if (row) { const r = row.getBoundingClientRect(), after = y > r.top + r.height / 2; t = { r: +row.dataset.r, index: +row.dataset.t + (after ? 1 : 0), el: row, cls: after ? 'drop-after' : 'drop-before' }; }
+    else if (nb) t = { r: +nb.dataset.round, index: pk.rounds[+nb.dataset.round].themes.length, el: nb, cls: 'drop-into' };
+    else if (E.tab[0] === 'r' && at('.ed-main')) { const ri = +E.tab.slice(1); t = { r: ri, index: pk.rounds[ri].themes.length, el: $('.ed-board') || at('.ed-main'), cls: 'drop-end' }; }
+  } else if (k === 'q') {
+    const c = at('.ed-cell');
+    if (c && c.classList.contains('add')) t = { type: 'append', r: +c.dataset.r, t: +c.dataset.t, el: c, cls: 'drop-into' };
+    else if (c && c.dataset.q != null) t = { type: 'cell', r: +c.dataset.r, t: +c.dataset.t, q: +c.dataset.q, el: c, cls: 'drop-into' };
+  }
+  // бросить на самого себя — ничего не делать
+  if (t && DR.src.game === S.packId) {
+    const s = DR.src;
+    if (k === 'round' && (t.index === s.r || t.index === s.r + 1)) t.noop = true;
+    if (k === 'theme' && t.r === s.r && (t.index === s.t || t.index === s.t + 1) && t.cls !== 'drop-into') t.noop = true;
+    if (k === 'q' && t.type === 'cell' && t.r === s.r && t.t === s.t && t.q === s.q) t.noop = true;
+  }
+  return { t, game: at('.game-item[data-game]') };
 }
-let roundDrag = null;
-function endRoundDrag(drop) {
-  const d = roundDrag; roundDrag = null;
+function dragHoverGame(item) {
+  const id = item ? item.dataset.game : null;
+  if (DR.hg && DR.hg.id === id) return;
+  if (DR.hg) { clearTimeout(DR.hg.timer); $$('.game-item.arming').forEach(x => x.classList.remove('arming')); DR.hg = null; }
+  if (!id || id === S.packId) return;
+  item.classList.add('arming');
+  DR.hg = { id, timer: setTimeout(async () => {
+    if (!DR) return;
+    const keepTab = E.tab;
+    await loadPack(id); E.sel = null;
+    E.tab = keepTab[0] === 'r' && S.pack.rounds[+keepTab.slice(1)] ? keepTab : 'r0';
+    renderEditor(); sfx('bind');
+    toast(`Открыта «${S.pack.name}» — бросай сюда`);
+    if (DR) DR.hg = null;
+  }, 900) };
+}
+function dragCleanup() {
+  $$('.drop-before,.drop-after,.drop-into,.drop-end,.drag-src,.game-item.arming').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-end', 'drag-src', 'arming'));
+  const g = $('#drag-ghost'); if (g) g.remove();
+  document.body.classList.remove('dragging-any');
+}
+function dragEnd(drop) {
+  const d = DR; DR = null;
   if (!d || !d.active) return;
-  document.body.classList.remove('dragging-round');
+  if (d.hg) clearTimeout(d.hg.timer);
+  const tgt = d.target;
+  dragCleanup();
   E.suppressClick = true; setTimeout(() => { E.suppressClick = false; }, 300);
-  if (drop && d.to !== d.from) moveRound(d.from, d.to); else renderEditor();
+  if (drop && tgt && !tgt.noop) applyDrop(d, tgt); else renderEditor();
+}
+function applyDrop(d, tgt) {
+  const pk = S.pack, same = d.src.game === S.packId;
+  const openR = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null, gameR = G && G.packId === S.packId ? pk.rounds[G.round] : null;
+  let msg = '';
+  if (d.kind === 'round') {
+    if (same) { const [r] = pk.rounds.splice(d.src.r, 1); let i = tgt.index; if (d.src.r < i) i--; pk.rounds.splice(i, 0, r); msg = `Раунд «${r.name}» — теперь ${i + 1}-й`; }
+    else { pk.rounds.splice(tgt.index, 0, clone(d.data)); msg = `Раунд «${d.data.name}» скопирован в «${pk.name}»`; }
+  } else if (d.kind === 'theme') {
+    const dest = pk.rounds[tgt.r];
+    if (same) {
+      const srcR = pk.rounds[d.src.r], [t] = srcR.themes.splice(d.src.t, 1);
+      let i = tgt.index; if (srcR === dest && d.src.t < i) i--;
+      dest.themes.splice(i, 0, t); msg = srcR === dest ? `Тема «${t.name}» перемещена` : `Тема «${t.name}» перенесена в «${dest.name}»`;
+    } else { dest.themes.splice(tgt.index, 0, clone(d.data)); msg = `Тема «${d.data.name}» скопирована в «${pk.name}» → «${dest.name}»`; }
+  } else if (d.kind === 'q') {
+    if (tgt.type === 'cell') {
+      if (same) { swapCells(d.src, tgt); return; }
+      const arr = pk.rounds[tgt.r].themes[tgt.t].questions, nq = clone(d.data);
+      nq.value = arr[tgt.q].value; arr[tgt.q] = nq; msg = 'Вопрос скопирован в клетку (прежний вопрос клетки заменён)';
+    } else {
+      const arr = pk.rounds[tgt.r].themes[tgt.t].questions, nq = same ? pk.rounds[d.src.r].themes[d.src.t].questions.splice(d.src.q, 1)[0] : clone(d.data);
+      nq.value = 0; arr.push(nq); msg = same ? 'Вопрос перенесён в конец темы' : 'Вопрос скопирован в конец темы';
+    }
+  }
+  if (openR && pk.rounds.includes(openR)) E.tab = 'r' + pk.rounds.indexOf(openR);
+  if (gameR) { G.round = Math.max(0, pk.rounds.indexOf(gameR)); save(); }
+  E.sel = null; savePack(); renderEditor(); sfx('bind'); toast(msg);
 }
 document.addEventListener('pointerdown', e => {
-  const el = e.button === 0 && e.target.closest && e.target.closest('.nav-b[data-round]');
-  if (el) roundDrag = { el, from: +el.dataset.round, to: +el.dataset.round, y0: e.clientY, active: false };
+  if (e.button !== 0 || S.screen !== 'editor' || $('.modal-bg')) return;
+  const t = e.target;
+  if (!t.closest || t.closest('input,textarea,select,label,.games')) return;
+  let el, kind, src;
+  if ((el = t.closest('.nav-b[data-round]'))) { kind = 'round'; src = { r: +el.dataset.round }; }
+  else if ((el = t.closest('.ed-cell[data-q]'))) { kind = 'q'; src = { r: +el.dataset.r, t: +el.dataset.t, q: +el.dataset.q }; }
+  else if ((el = t.closest('.ed-tcol'))) {
+    if (t.closest('button') && !t.closest('.tgrip')) return;
+    const row = el.closest('.ed-theme'); kind = 'theme'; src = { r: +row.dataset.r, t: +row.dataset.t };
+  } else return;
+  DR = { kind, src: Object.assign({ game: S.packId }, src), el, x0: e.clientX, y0: e.clientY, active: false };
 });
 document.addEventListener('pointermove', e => {
-  const d = roundDrag; if (!d) return;
-  const dy = e.clientY - d.y0;
+  const d = DR; if (!d) return;
   if (!d.active) {
-    if (Math.abs(dy) < 5) return;   // маленький сдвиг — это ещё клик
-    d.active = true; d.el.classList.add('dragging'); document.body.classList.add('dragging-round');
+    if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;   // маленький сдвиг — это ещё клик
+    const pk = S.pack, s = d.src;
+    if (d.kind === 'round') { d.data = clone(pk.rounds[s.r]); d.label = `🗂 Раунд «${d.data.name}»`; }
+    if (d.kind === 'theme') { d.data = clone(pk.rounds[s.r].themes[s.t]); d.label = `📋 Тема «${d.data.name || 'без названия'}»`; }
+    if (d.kind === 'q') { const q = pk.rounds[s.r].themes[s.t].questions[s.q]; d.data = clone(q); d.label = `❓ ${fmt(qValue(q, s.q, s.r))} · ${(q.text || 'пустой вопрос').slice(0, 40)}`; }
+    d.active = true;
+    const g = document.createElement('div'); g.id = 'drag-ghost'; g.textContent = d.label; document.body.append(g);
+    d.el.classList.add('drag-src'); document.body.classList.add('dragging-any');
+    try { window.getSelection().removeAllRanges(); } catch { }
   }
-  d.el.style.transform = `translateY(${dy}px)`;
-  const items = $$('.nav-b[data-round]');
-  let to = d.from;
-  items.forEach((it, i) => {
-    if (it === d.el) return;
-    const r = it.getBoundingClientRect(), mid = r.top + r.height / 2;
-    if (i < d.from && e.clientY < mid) to = Math.min(to, i);
-    if (i > d.from && e.clientY > mid) to = Math.max(to, i);
-  });
-  d.to = to;
-  // остальные раунды плавно разъезжаются, освобождая место, куда упадёт перетаскиваемый
-  const step = d.el.getBoundingClientRect().height + 4;
-  items.forEach((it, i) => {
-    if (it === d.el) return;
-    const shift = to > d.from && i > d.from && i <= to ? -step : to < d.from && i >= to && i < d.from ? step : 0;
-    it.style.transform = shift ? `translateY(${shift}px)` : '';
-  });
+  const g = $('#drag-ghost'); if (g) g.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 14}px)`;
+  const { t, game } = dragTarget(e.clientX, e.clientY);
+  $$('.drop-before,.drop-after,.drop-into,.drop-end').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-end'));
+  d.target = t;
+  if (t && !t.noop && t.el) t.el.classList.add(t.cls);
+  dragHoverGame(game);
 });
-document.addEventListener('pointerup', () => endRoundDrag(true));
-document.addEventListener('pointercancel', () => endRoundDrag(false));
-document.addEventListener('keydown', e => { if (e.code === 'Escape' && roundDrag && roundDrag.active) endRoundDrag(false); });
+document.addEventListener('pointerup', () => dragEnd(true));
+document.addEventListener('pointercancel', () => dragEnd(false));
+document.addEventListener('keydown', e => { if (e.code === 'Escape' && DR && DR.active) dragEnd(false); });
 
 function edAct(a, d) {
   if (a.startsWith('ed-reg')) { regAct(a, d); return; }
+  if (a === 'ed-newgame' || a === 'ed-opengame' || a === 'ed-delgame' || a === 'ed-new') { gamesAct(a === 'ed-new' ? 'ed-newgame' : a, d); return; }
   const pk = S.pack, r = d.r != null ? pk.rounds[+d.r] : null, curRound = E.tab[0] === 'r' ? pk.rounds[+E.tab.slice(1)] : null;
   let reopenBank = false;
   switch (a) {
@@ -1722,9 +1837,6 @@ function edAct(a, d) {
       E.sel = null; closeModal(); sfx('mod'); break;
     }
     case 'ed-export': exportPack(); return;
-    case 'ed-new': if (!confirm('Создать пустой пакет? Текущий заменится (сначала можно сделать экспорт).')) return;
-      S.pack = normalizePack({ name: 'Новый пакет', rounds: [1, 2, 3, 4].map(n => ({ name: 'Раунд ' + n, randomMods: 2, themes: [] })), final: { themes: [] }, modifiers: clone(window.DEFAULT_PACK.modifiers), bank: clone(window.DEFAULT_PACK.bank) });
-      E.tab = 'r0'; E.sel = null; break;
     case 'ed-reset': if (!confirm('Вернуть стандартный пакет? Твои изменения пропадут (сначала можно сделать экспорт).')) return; S.pack = normalizePack(clone(window.DEFAULT_PACK)); E.tab = 'pack'; E.sel = null; break;
   }
   savePack(); renderEditor();
@@ -1743,11 +1855,27 @@ document.addEventListener('paste', e => {
   // ключ GitHub можно передать ссылкой …/screen#ghtoken=… — он сохранится только в этом браузере
   const m = location.hash.match(/ghtoken=([\w-]+)/);
   if (m) { try { localStorage.setItem('svoyak-ghtoken', m[1]); } catch { } history.replaceState(null, '', location.pathname + location.search); }
-  const stored = await DB.get('pack'), def = window.DEFAULT_PACK;
-  const oldBuiltin = stored && (stored.builtin || ((stored.version || 1) === 1 && stored.name === def.name));
-  const useDefault = !stored || (oldBuiltin && (stored.version || 1) < def.version);
-  S.pack = normalizePack(useDefault ? clone(def) : stored);
-  if (useDefault) { S.pack.builtin = true; DB.set('pack', S.pack); }
+  const def = window.DEFAULT_PACK;
+  let index = await DB.get('packs-index');
+  if (!Array.isArray(index) || !index.length) {
+    // переезд на «несколько игр»: прежний единственный пакет становится первой игрой
+    const stored = await DB.get('pack');
+    const oldBuiltin = stored && (stored.builtin || ((stored.version || 1) === 1 && stored.name === def.name));
+    const useDefault = !stored || (oldBuiltin && (stored.version || 1) < def.version);
+    const first = normalizePack(useDefault ? clone(def) : stored);
+    if (useDefault) first.builtin = true;
+    const id = 'g' + Date.now().toString(36);
+    await DB.set('pack:' + id, first);
+    index = [{ id, name: first.name, updated: Date.now() }];
+    await DB.set('packs-index', index);
+    LS.set('svoyak-current-pack', id);
+  }
+  GAMES.list = index;
+  let cur = LS.get('svoyak-current-pack', null);
+  if (!index.some(g => g.id === cur)) cur = index[0].id;
+  let p = await DB.get('pack:' + cur);
+  if (p && p.builtin && (p.version || 1) < def.version) { p = clone(def); p.builtin = true; }
+  S.pack = normalizePack(p || clone(def)); S.packId = cur;
   connectNet();
   requestAnimationFrame(pollGamepads);
   render();
