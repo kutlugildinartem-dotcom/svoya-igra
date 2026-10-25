@@ -344,9 +344,10 @@ function hostState() {
   if (T) st.timer = { end: T.end, total: T.total };
   if (Q) {
     const q = Q.q, m = Q.modId ? modById(Q.modId) : null;
-    st.q = { theme: Q.theme, value: fmt(Q.value), text: Q.text, answer: q.answer || '—', type: Q.type, media: q.media && q.media.src ? q.media.kind : '', mod: m ? m.emoji + ' ' + m.name : '' };
+    // модификатор скрыт от всех, включая ведущего, пока кто-нибудь его не схватит
+    st.q = { theme: Q.theme, value: fmt(Q.value), text: Q.text, answer: q.answer || '—', type: Q.type, media: q.media && q.media.src ? q.media.kind : '', mod: m ? (Q.view === 'grab' ? '❓ Модификатор (сюрприз)' : m.emoji + ' ' + m.name) : '' };
     switch (Q.view) {
-      case 'grab': st.status = Q.phase === 'grab' ? `Модификатор «${m.name}»: кто первый нажмёт` : 'Сейчас появится модификатор'; pl('grab-give', null, 'Отдать: '); A('Никто → к вопросу', 'mod-skip'); break;
+      case 'grab': st.status = Q.phase === 'grab' ? 'Модификатор! Кто рискнёт нажать первым?' : 'Сейчас появится модификатор'; pl('grab-give', null, 'Отдать: '); A('Никто → к вопросу', 'mod-skip'); break;
       case 'mod-target': st.status = `${player(Q.modOwner).name}: выбери игрока`; pl('mod-target', p => MOD_TYPES[m.type].target === 'any' || p.id !== Q.modOwner); break;
       case 'mod-result': st.status = Q.modText; A('К вопросу →', 'to-question', null, 'primary'); break;
       case 'cat-pick': st.status = 'Кот в мешке: кому отдаём?'; pl('cat-give', p => p.id !== G.chooser); break;
@@ -386,7 +387,7 @@ function hostState() {
   else if (G.phase === 'board') {
     const ch = player(G.chooser);
     st.status = (ch ? ch.name : 'Игрок') + ' выбирает вопрос';
-    st.board = round().themes.map((t, ti) => ({ name: t.name, cells: t.questions.map((q, qi) => { const k = ti + '-' + qi; return { k, v: fmt(qValue(q, qi)), used: !!G.used[k], mark: (QICONS[q.type] || '') + (G.modCells[k] ? '✨' : '') }; }) }));
+    st.board = round().themes.map((t, ti) => ({ name: t.name, cells: t.questions.map((q, qi) => { const k = ti + '-' + qi; return { k, v: fmt(qValue(q, qi)), used: !!G.used[k], mark: QICONS[q.type] || '' }; }) }));   // где спрятаны модификаторы — не показываем даже ведущему
   } else if (G.phase === 'roundEnd') { st.status = 'Раунд окончен'; A(G.round >= S.pack.rounds.length - 1 ? 'В финал →' : 'Следующий раунд →', 'next-round', null, 'primary'); }
   else if (G.phase === 'final' && F) {
     if (F.phase === 'remove') { st.status = `${player(F.parts[F.turn % F.parts.length]).name} убирает тему · осталось ${fin.length - F.removed.length}`; fin.forEach((t, i) => { if (!F.removed.includes(i)) A('✕ ' + t.name, 'f-remove', { i: String(i) }); }); }
@@ -714,9 +715,10 @@ function targetPrompt(m) {
 function questionHTML() {
   const q = Q.q;
   switch (Q.view) {
-    case 'grab':   // что внутри — не показываем никому, пока кто-то не схватит
+    case 'grab':   // что внутри — не показываем никому, пока кто-то не схватит; надпись крутится
       return `<div class="center">${metaHTML()}
-        <div class="mod-card mystery"><div class="e">❓</div><div class="n">Модификатор!</div><div class="d">Что внутри — узнает тот, кто нажмёт первым</div></div>
+        <div class="mod-card mystery"><div class="mod-word">${[...'МОДИФИКАТОР'].map((c, i) => `<span style="animation-delay:${(i * 0.08).toFixed(2)}s">${c}</span>`).join('')}</div>
+          <div class="d">Хорошее или плохое — узнаете, когда кто-нибудь рискнёт нажать</div></div>
         <div class="status" id="status"></div><div class="controls" id="controls"></div></div>`;
     case 'mod-target': {
       const m = modById(Q.modId), owner = player(Q.modOwner), def = MOD_TYPES[m.type];
@@ -770,7 +772,7 @@ function questionHTML() {
 function setDyn(id, html) { const el = $('#' + id); if (el && el.dataset.v !== html) { el.innerHTML = html; el.dataset.v = html; } }
 function updateDynamic() {
   if (Q && Q.view === 'grab') {
-    setDyn('status', Q.phase === 'grab' ? 'Кто первый нажмёт — забирает!' : '<span class="muted">Приготовьтесь…</span>');
+    setDyn('status', Q.phase === 'grab' ? 'Кто рискнёт? Первый нажавший забирает!' : '<span class="muted">Приготовьтесь…</span>');
     setDyn('controls', '<button class="btn ghost" data-act="mod-skip">Никто — к вопросу</button>');
   } else if (Q && Q.view === 'question') {
     let s = '', c = '';

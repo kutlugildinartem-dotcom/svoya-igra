@@ -307,7 +307,7 @@ function draw() {
   else if (!me) {
     if (state.capture) { cls = 'join'; label = 'Я ТУТ'; status = 'Нажми, чтобы ведущий привязал кнопку к тебе'; }
     else { status = 'Ждём, пока ведущий добавит тебя в игру'; label = '…'; }
-  } else if (ph === 'grab') { cls = 'grab'; label = 'ХВАТАЙ!'; status = 'Модификатор! Кто первый — того и тапки'; }
+  } else if (ph === 'grab') { cls = 'grab'; label = 'РИСКНУТЬ'; status = 'Модификатор! Хорошее или плохое — узнаешь, если нажмёшь первым'; }
   else if (ph === 'wait') { status = 'Сейчас будет модификатор…'; label = 'ЖДИ'; }
   else if (ph === 'closest') { status = 'Отвечают все по очереди — вслух'; label = '🎯'; }
   else if (ph === 'voting') { const n = (state.q && state.q.voted || []).length; status = `Голосование · проголосовали ${n} из ${state.players.length}`; }
