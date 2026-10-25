@@ -244,6 +244,10 @@ function onNet(m) {
     const at = Number(m.at) && Math.abs(m.at - m.t) < 3000 ? Number(m.at) : m.t;
     onDevice('phone:' + m.id, at);
   }
+  else if (m.type === 'fremove') {   // игрок убирает финальную тему со своего телефона — только в свою очередь
+    const p = S.players.find(o => o.binding === 'phone:' + m.id);
+    if (p && F && F.phase === 'remove' && F.theme == null && F.parts[F.turn % F.parts.length] === p.id) act('f-remove', { i: String(Number(m.i)) });
+  }
   else if (m.type === 'vote') {
     const p = S.players.find(o => o.binding === 'phone:' + m.id);
     if (p && Q && Q.type === 'vote' && Q.view === 'question') { Q.votes[p.id] = String(m.choice || '').slice(0, 60); sfx('bind'); render(); }
@@ -282,7 +286,8 @@ function netState() {
       if (Q.view === 'grab') phase = Q.phase === 'grab' ? 'grab' : 'wait';
       else if (Q.view === 'question') phase = Q.type === 'closest' ? 'closest' : Q.type === 'vote' ? 'voting' : Q.phase;
     } else if (G.phase === 'final' && F) {
-      if (F.phase === 'bet') phase = 'final-bet';
+      if (F.phase === 'remove') phase = 'final-remove';
+      else if (F.phase === 'bet') phase = 'final-bet';
       else if (F.phase === 'question') phase = 'final-answer';
     }
   }
@@ -316,7 +321,11 @@ function netState() {
     phase, capture: !!capture, title, q, board, chooser: live && G.phase === 'board' && !Q ? G.chooser : null,
     answering: Q ? Q.answering : null, only: Q ? Q.only : null, tried: Q ? Q.tried : [],
     players: S.players.map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score, binding: p.binding })),
-    final: F ? { parts: F.parts, bets: Object.keys(F.bets), answers: Object.keys(F.answers) } : null,
+    final: F ? {
+      parts: F.parts, bets: Object.keys(F.bets), answers: Object.keys(F.answers),
+      turn: F.phase === 'remove' && F.theme == null ? F.parts[F.turn % F.parts.length] : null,
+      themes: F.phase === 'remove' ? S.pack.final.themes.map((t, i) => ({ name: t.name, gone: F.removed.includes(i) })) : null,
+    } : null,
   };
 }
 /* состояние для пульта ведущего: всё, что ему нужно видеть, и кнопки, которые он может нажать */
@@ -380,7 +389,7 @@ function hostState() {
     st.board = round().themes.map((t, ti) => ({ name: t.name, cells: t.questions.map((q, qi) => { const k = ti + '-' + qi; return { k, v: fmt(qValue(q, qi)), used: !!G.used[k], mark: (QICONS[q.type] || '') + (G.modCells[k] ? '✨' : '') }; }) }));
   } else if (G.phase === 'roundEnd') { st.status = 'Раунд окончен'; A(G.round >= S.pack.rounds.length - 1 ? 'В финал →' : 'Следующий раунд →', 'next-round', null, 'primary'); }
   else if (G.phase === 'final' && F) {
-    if (F.phase === 'remove') { st.status = player(F.parts[F.turn % F.parts.length]).name + ' убирает тему'; fin.forEach((t, i) => { if (!F.removed.includes(i)) A('✕ ' + t.name, 'f-remove', { i: String(i) }); }); }
+    if (F.phase === 'remove') { st.status = `${player(F.parts[F.turn % F.parts.length]).name} убирает тему · осталось ${fin.length - F.removed.length}`; fin.forEach((t, i) => { if (!F.removed.includes(i)) A('✕ ' + t.name, 'f-remove', { i: String(i) }); }); }
     else {
       const t = fin[F.theme];
       st.q = { theme: 'Финал · ' + t.name, value: '', text: t.text, answer: t.answer || '—', type: 'final', media: t.media && t.media.src ? t.media.kind : '' };
@@ -921,11 +930,12 @@ function finalHTML() {
   const fin = S.pack.final.themes;
   if (F.phase === 'remove') {
     const cur = player(F.parts[F.turn % F.parts.length]);
-    const out = S.players.filter(p => !F.parts.includes(p.id));
-    return `<div class="center"><div class="kicker">Финал</div><div class="big-sign" style="font-size:clamp(34px,5vw,70px)">Убираем темы</div>
-      <div class="status">${whoHTML(cur)}, какую тему убираешь?</div>
-      <div class="final-themes">${fin.map((t, i) => `<button class="${F.removed.includes(i) ? 'gone' : ''}" data-act="f-remove" data-i="${i}" ${F.removed.includes(i) ? 'disabled' : ''}>${esc(t.name)}</button>`).join('')}</div>
-      <div class="hint">В финале играют только те, у кого счёт больше нуля.${out.length ? ' Не прошли: ' + out.map(p => esc(p.name)).join(', ') : ''}</div></div>`;
+    const out = S.players.filter(p => !F.parts.includes(p.id)), left = fin.length - F.removed.length;
+    const phones = F.parts.some(pid => { const p = player(pid); return p && p.binding && p.binding.startsWith('phone:'); });
+    return `<div class="center"><div class="kicker">Финал · осталось ${left} из ${fin.length}</div><div class="big-sign" style="font-size:clamp(30px,4.4vw,62px)">Убираем темы</div>
+      <div class="status">${whoHTML(cur)}, какую тему убираешь?${phones ? ' <span class="muted" style="font-size:.6em">— можно прямо с телефона</span>' : ''}</div>
+      <div class="final-themes ${fin.length > 6 ? 'grid' : ''}">${fin.map((t, i) => { const gone = F.removed.includes(i); return `<button class="${gone ? 'gone' : ''} ${F.lastGone === i ? 'just-gone' : ''}" data-act="f-remove" data-i="${i}" ${gone ? 'disabled' : ''}>${esc(t.name)}</button>`; }).join('')}</div>
+      <div class="hint">Первым убирает тот, у кого меньше очков, дальше по очереди. Последняя оставшаяся тема — финальная.${out.length ? ' Не прошли в финал (счёт не больше нуля): ' + out.map(p => esc(p.name)).join(', ') : ''}</div></div>`;
   }
   const t = finalTheme();
   if (F.phase === 'bet') {
@@ -1136,11 +1146,15 @@ function act(a, d = {}) {
     }
     /* финал */
     case 'f-remove': {
-      if (!F || F.phase !== 'remove' || F.removed.includes(+d.i)) break;
+      if (!F || F.phase !== 'remove' || F.theme != null || F.removed.includes(+d.i)) break;
       const fin = S.pack.final.themes;
-      F.removed.push(+d.i); F.turn++; sfx('bad');
+      F.removed.push(+d.i); F.lastGone = +d.i; F.turn++; sfx('bad');
       const left = fin.map((_, i) => i).filter(i => !F.removed.includes(i));
-      if (left.length === 1) { F.theme = left[0]; F.phase = 'bet'; sfx('fanfare'); }
+      if (left.length === 1) {   // осталась одна — даём полсекунды полюбоваться и переходим к ставкам
+        F.theme = left[0]; save(); render();
+        setTimeout(() => { if (F && F.phase === 'remove') { F.phase = 'bet'; sfx('fanfare'); save(); render(); } }, 900);
+        break;
+      }
       save(); render(); break;
     }
     case 'f-bet': if (F && F.phase === 'bet' && p) { setBet(p, d.v, false); render(); } break;
@@ -1221,7 +1235,7 @@ async function loadPack(id, noFlush) {
 async function newGame(fromPack) {
   await flushPack();
   const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-  const base = fromPack || { name: 'Игра ' + (GAMES.list.length + 1), rounds: [1, 2, 3, 4].map(n => ({ name: 'Раунд ' + n, randomMods: 2, themes: [] })), final: { themes: [] }, modifiers: clone(window.DEFAULT_PACK.modifiers), bank: [] };
+  const base = fromPack || { name: 'Игра ' + (GAMES.list.length + 1), rounds: [1, 2, 3, 4].map(n => ({ name: 'Раунд ' + n, randomMods: 2, themes: [] })), final: { themes: clone(window.FINAL_HARD) }, modifiers: clone(window.DEFAULT_PACK.modifiers), bank: [] };
   S.pack = normalizePack(base); S.pack.builtin = false; S.packId = id;
   LS.set('svoyak-current-pack', id);
   await persistPack();
@@ -1533,7 +1547,8 @@ function edMain() {
   }
   if (E.tab === 'final') {
     const fin = pk.final.themes;
-    return `<div class="ed-head"><div class="logo sm">ФИНАЛ</div><span class="muted grow">Игроки по очереди убирают темы, на последнюю делают ставки</span>${gamesWidget(true)}</div>
+    return `<div class="ed-head"><div class="logo sm">ФИНАЛ</div><span class="muted grow">Тем: ${fin.length}. Игроки по очереди убирают по одной (первым — у кого меньше очков), на последнюю делают ставки</span>${gamesWidget(true)}</div>
+      <div class="row wrap gap" style="margin-bottom:14px"><button class="btn sm" data-act="ed-finalhard">⭐ Вставить 12 сложных тем</button><span class="hint" style="margin:0">Кино, космос, география, тело, алкоголь, музыка, литература, животные, бренды, история, 18+, еда</span></div>
       <div class="ed-list">${fin.map((t, i) => { const b = `final.themes.${i}`; return `<div class="ed-item">
         <div class="row"><input class="inp" data-path="${b}.name" value="${esc(t.name)}" placeholder="Тема" style="font-weight:800"><button class="icon" data-act="ed-fdel" data-i="${i}" title="Удалить">🗑</button></div>
         <textarea class="inp" rows="2" data-path="${b}.text" placeholder="Вопрос">${esc(t.text)}</textarea>${mediaEditor(b + '.media', t.media)}
@@ -1794,6 +1809,11 @@ function edAct(a, d) {
     case 'ed-delround': if (pk.rounds.length <= 1) return alert('Нужен хотя бы один раунд'); if (!confirm('Удалить раунд «' + r.name + '»?')) return; pk.rounds.splice(+d.r, 1); E.tab = 'pack'; E.sel = null; break;
     case 'ed-mdel': setPath(pk, d.path, null); break;
     case 'ed-fadd': pk.final.themes.push({ name: 'Новая тема', text: '', answer: '', media: null, answerMedia: null }); break;
+    case 'ed-finalhard': {
+      const has = pk.final.themes.filter(t => String(t.text || '').trim()).length;
+      if (has && !confirm(`Заменить ${pk.final.themes.length} тем финала на 12 сложных? («Отмена» — ничего не менять)`)) return;
+      pk.final.themes = clone(window.FINAL_HARD); toast('В финале 12 сложных тем'); break;
+    }
     case 'ed-fdel': if (!confirm('Удалить тему финала?')) return; pk.final.themes.splice(+d.i, 1); break;
     case 'ed-modadd': pk.modifiers.push({ id: uid(), emoji: '✨', name: 'Новый модификатор', desc: '', type: 'add', amount: 500, enabled: true, hidden: false }); break;
     case 'ed-moddel': if (!confirm('Удалить модификатор?')) return; pk.modifiers.splice(+d.i, 1); break;
@@ -1871,6 +1891,17 @@ document.addEventListener('paste', e => {
     LS.set('svoyak-current-pack', id);
   }
   GAMES.list = index;
+  // финал из 12 сложных тем: где стоит прежний стандартный финал (его не меняли) — заменяем сами, один раз
+  if (!LS.get('svoyak-final12', false)) {
+    const old = (window.FINAL_OLD_NAMES || []).join('|');
+    for (const g of index) {
+      const pg = await DB.get('pack:' + g.id);
+      if (pg && pg.final && Array.isArray(pg.final.themes) && pg.final.themes.map(t => t.name).join('|') === old) {
+        pg.final.themes = clone(window.FINAL_HARD); await DB.set('pack:' + g.id, pg);
+      }
+    }
+    LS.set('svoyak-final12', true);
+  }
   let cur = LS.get('svoyak-current-pack', null);
   if (!index.some(g => g.id === cur)) cur = index[0].id;
   let p = await DB.get('pack:' + cur);
